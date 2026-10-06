@@ -14,7 +14,7 @@
 
 | 能力 | 要求 |
 |---|---|
-| 可获取 root | 实例内可获得 root，重启后保持 |
+| 可获取 Root 权限 | 实例内可获得 Root 权限，重启后保持 |
 | 系统可写 | 系统分区可写，可刷模块、可改系统 |
 | 可刷镜像 | 支持替换实例内的安卓镜像 |
 | 可运行 ARM 应用 | 通过 native bridge 运行 ARM 原生应用 |
@@ -42,13 +42,32 @@
 
 ## 当前状态
 
-实现尚未开始。正在进行镜像可行性的前置验证，验证通过后按里程碑推进：单实例 → 保真度 → 多开。
+核心层与界面层已实现，**336 个自动化测试全绿**（核心层 300 + 界面层 36），并通过**全新递归克隆的端到端复现**验证。
 
-首验镜像为 **Bliss OS 17（Android 14）**。
+已实现的子系统：QEMU 参数生成与进程托管、QMP 客户端、ADB 客户端（含 sync 子协议）、实例生命周期与配置仓库、设备标识隔离、输入通道探测、规格校验与双向兼容测试、WPF 界面外壳。
+
+**尚未验证的部分**：镜像能否启动到桌面。这是判定本路线价值成立与否的前提，镜像仍在下载中。
+
+首验镜像为 **Bliss OS 14.10.3（Android 11）**。选型依据见项目状态文档：Bliss OS 17 与 18 已从官方渠道下架，Android-x86 官方最新稳定版仍是 9.0-r2（Android 9），无法满足主流应用对 Android 10 的最低要求。
 
 ## 构建
 
-待工程骨架落地后补充。
+需要 .NET 8 SDK。契约以 submodule 形式位于 `spec/`，克隆时须一并拉取：
+
+```bash
+git clone --recurse-submodules https://github.com/MissKisser/xiaoxiong-windows.git
+```
+
+构建与测试：
+
+```bash
+dotnet build XBear.sln -c Release
+dotnet test XBear.sln -c Release --no-build
+```
+
+工程开启了 `TreatWarningsAsErrors` 与 `GenerateDocumentationFile`，**零警告是硬要求**：`public` 与 `protected` 成员必须携带完整 XML 文档标签，否则编译失败。
+
+界面运行时依赖宿主已安装 **QEMU**（默认在 `C:\Program Files\qemu\`）与已启用的 **Hypervisor Platform** 可选功能。
 
 ## 许可证
 
