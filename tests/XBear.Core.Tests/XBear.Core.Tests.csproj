@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="JsonSchema.Net" Version="7.3.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\XBear.Core\XBear.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    共享规格以 submodule 形式位于 ../../spec/，其下真实内容为 spec/。
+    测试需要读取这些契约文件做 Schema 校验与双向兼容验证，
+    故原样复制到输出目录，运行期以 spec/ 为根定位。
+  -->
+  <ItemGroup>
+    <SpecDir Include="$(MSBuildThisFileDirectory)..\..\spec\spec\**\*" />
+  </ItemGroup>
+
+  <Target Name="CopySpecToOutput" BeforeTargets="Build">
+    <Copy SourceFiles="@(SpecDir)"
+          DestinationFolder="$(OutDir)spec\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <ItemGroup>
+    <None Include="$(OutDir)spec\**\*.json" CopyToOutputDirectory="Never" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,113 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+
+namespace XBear.Core.Spec;
+
+/// <summary>实例配置，对应 spec/schema/instance.schema.json。</summary>
+public sealed class InstanceSpec
+{
+    [JsonPropertyName("schemaVersion")]
+    public string SchemaVersion { get; set; } = "1.0.0";
+
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = string.Empty;
+
+    [JsonPropertyName("platform")]
+    public string Platform { get; set; } = "windows";
+
+    [JsonPropertyName("imageRef")]
+    public string ImageRef { get; set; } = string.Empty;
+
+    [JsonPropertyName("resources")]
+    public ResourceSpec Resources { get; set; } = new();
+
+    [JsonPropertyName("network")]
+    public NetworkSpec? Network { get; set; }
+
+    [JsonPropertyName("deviceIdentity")]
+    public DeviceIdentity? DeviceIdentity { get; set; }
+
+    /// <summary>平台特有字段逃生舱，通用契约不解析其内部结构。</summary>
+    [JsonPropertyName("platformConfig")]
+    public JsonElement? PlatformConfig { get; set; }
+}
+
+/// <summary>实例资源配额。</summary>
+public sealed class ResourceSpec
+{
+    [JsonPropertyName("memoryMB")]
+    public int MemoryMB { get; set; } = 4096;
+
+    [JsonPropertyName("cpuCores")]
+    public int CpuCores { get; set; } = 4;
+
+    [JsonPropertyName("diskGB")]
+    public int DiskGB { get; set; } = 32;
+}
+
+/// <summary>实例网络配置。</summary>
+public sealed class NetworkSpec
+{
+    [JsonPropertyName("portForwards")]
+    public List<PortForward> PortForwards { get; set; } = new();
+
+    /// <summary>固定地址，格式 10.0.2.x，为 null 时由 QEMU 动态分配。</summary>
+    [JsonPropertyName("fixedAddress")]
+    public string? FixedAddress { get; set; }
+
+    [JsonPropertyName("proxy")]
+    public ProxySpec? Proxy { get; set; }
+
+    /// <summary>端口对外可达级别，缺省为 loopback。</summary>
+    [JsonPropertyName("exposure")]
+    public string Exposure { get; set; } = "loopback";
+}
+
+/// <summary>端口映射条目。</summary>
+public sealed class PortForward
+{
+    [JsonPropertyName("hostPort")]
+    public int HostPort { get; set; }
+
+    [JsonPropertyName("guestPort")]
+    public int GuestPort { get; set; }
+
+    [JsonPropertyName("protocol")]
+    public string Protocol { get; set; } = "tcp";
+
+    [JsonPropertyName("bind")]
+    public string? Bind { get; set; }
+}
+
+/// <summary>实例内代理配置。</summary>
+public sealed class ProxySpec
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "http";
+
+    [JsonPropertyName("host")]
+    public string Host { get; set; } = string.Empty;
+
+    [JsonPropertyName("port")]
+    public int Port { get; set; }
+
+    /// <summary>pac 类型时使用的脚本地址。</summary>
+    [JsonPropertyName("url")]
+    public string? Url { get; set; }
+}
+
+/// <summary>实例设备身份标识，每实例强制独立且不得自动复用。</summary>
+public sealed class DeviceIdentity
+{
+    [JsonPropertyName("serialNo")]
+    public string? SerialNo { get; set; }
+
+    [JsonPropertyName("androidId")]
+    public string? AndroidId { get; set; }
+
+    [JsonPropertyName("imei")]
+    public string? Imei { get; set; }
+}
