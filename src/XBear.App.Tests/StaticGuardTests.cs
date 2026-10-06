@@ -130,3 +130,98 @@ public class TerminologyComplianceTests
         Assert.False(result.IsValid);
     }
 }
+
+/// <summary>
+/// 规则二自证：XAML 引用的每一个设计令牌键，都必须由 Theme/TokenResources.cs 真实写入资源字典。
+///
+/// 这类错误只在窗口构造、样式被应用时才暴露，单元测试默认不构造真实窗口，
+/// 因此若无此静态交叉核对，一个拼错的键或缺失的形态会一路绿到程序启动即崩。
+/// WPF 的资源名区分大小写，写错一个字母即解析失败。
+/// </summary>
+public class TokenKeyReferentialIntegrityTests
+{
+    /// <summary>匹配 XAML 中 DynamicResource 与 StaticResource 引用的令牌键。</summary>
+    private static readonly Regex TokenReference = new(
+        @"Token\.[A-Za-z0-9.]+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>匹配 TokenResources 中写入资源字典的键，写入时会补上统一前缀。</summary>
+    private static readonly Regex ProducedKey = new(
+        @"Put\(resources,\s*""([^""]+)""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>TokenResources 写入键时使用的统一前缀。</summary>
+    private const string TokenPrefix = "Token.";
+
+    private static IReadOnlyCollection<string> ReadReferencedKeys()
+    {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (string path in UiSources.Enumerate()
+                     .Where(p => p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (Match match in TokenReference.Matches(File.ReadAllText(path)))
+            {
+                referenced.Add(match.Value);
+            }
+        }
+
+        return referenced;
+    }
+
+    private static IReadOnlyCollection<string> ReadProducedKeys()
+    {
+        string source = File.ReadAllText(
+            UiSources.Enumerate().First(p =>
+                p.EndsWith("TokenResources.cs", StringComparison.OrdinalIgnoreCase)));
+
+        var produced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in ProducedKey.Matches(source))
+        {
+            produced.Add(TokenPrefix + match.Groups[1].Value);
+        }
+
+        return produced;
+    }
+
+    [Fact]
+    public void EveryTokenKeyReferencedByXamlIsActuallyWrittenToResourceDictionary()
+    {
+        IReadOnlyCollection<string> referenced = ReadReferencedKeys();
+        IReadOnlyCollection<string> produced = ReadProducedKeys();
+
+        // 防止两侧都为空而空转：界面确实消费了令牌，桥接层也确实产出了键。
+        Assert.NotEmpty(referenced);
+        Assert.NotEmpty(produced);
+
+        var missing = referenced.Where(k => !produced.Contains(k)).OrderBy(k => k, StringComparer.Ordinal).ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "XAML 引用了未由 TokenResources 写入的资源键，运行期会解析失败：" + Environment.NewLine +
+            string.Join(Environment.NewLine, missing));
+    }
+
+    [Fact]
+    public void CompositeTypedTokenFormsArePresentForSpacingAndCornerRadius()
+    {
+        // Margin 与 Padding 的类型是 Thickness，CornerRadius 属性要 CornerRadius，
+        // 都不能直接消费 double 形态的令牌。缺少对应形态时窗口构造会抛异常。
+        IReadOnlyCollection<string> produced = ReadProducedKeys();
+
+        var required = new[]
+        {
+            TokenPrefix + "Thickness.Xs",
+            TokenPrefix + "Thickness.Sm",
+            TokenPrefix + "Thickness.Md",
+            TokenPrefix + "Thickness.Lg",
+        };
+
+        var absent = required.Where(k => !produced.Contains(k)).ToList();
+
+        Assert.True(
+            absent.Count == 0,
+            "间距令牌必须提供 Thickness 形态供 Margin 与 Padding 消费：" + Environment.NewLine +
+            string.Join(Environment.NewLine, absent));
+    }
+}
