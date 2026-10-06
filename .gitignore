@@ -1,3 +1,7 @@
+# 本文件采用「根锚定」约定：所有目录型忽略规则一律以 / 开头，只匹配仓库根目录下的同名目录。
+# 原因：不带前导 / 的目录规则（如 instances/）会在任意层级匹配，会把 src/XBear.Core/Instances/
+# 这类源码目录一并吞掉，导致必需源文件从未入库。目录规则必须锚定，文件扩展名规则不受此限。
+
 # .NET 构建产物
 bin/
 obj/
@@ -5,12 +9,12 @@ obj/
 [Rr]elease/
 *.user
 *.suo
-artifacts/
-publish/
+/artifacts/
+/publish/
 
 # IDE
-.vs/
-.idea/
+/.vs/
+/.idea/
 *.sln.docstates
 
 # QEMU 镜像与运行时数据（体积大且具实例特征，严禁入库）
@@ -19,17 +23,17 @@ publish/
 *.img
 *.iso
 *.vmdk
-instances/
-runtime/
-snapshots/
-images/
-firmware/
-bios/
+/instances/
+/runtime/
+/snapshots/
+/images/
+/firmware/
+/bios/
 
 # 日志与诊断
 *.log
-logs/
-diagnostics/
+/logs/
+/diagnostics/
 *.dmp
 
 # 密钥与本地配置（严禁入库）
