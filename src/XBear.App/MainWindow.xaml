@@ -67,6 +67,39 @@
                         <Button Content="{Binding ExportDiagnosticsText}" Click="OnChooseDiagnosticsDirectory" />
                     </StackPanel>
 
+                    <!-- 镜像导入：本地 Android 镜像文件转换为 base 镜像，转换耗时较长，必须有进度与取消。 -->
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ImportSectionTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding ImportHintText}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                            <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Thickness.Md}">
+                                <Button Content="{Binding ImportBaseImageText}" Click="OnChooseBaseImageToImport" />
+                                <Button Content="{Binding CancelImportText}" Command="{Binding CancelImportCommand}" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding HasImportProgress, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="{Binding ImportStageText}" FontWeight="{DynamicResource Token.Weight.Bold}" />
+                                <ProgressBar Minimum="0"
+                                             Maximum="100"
+                                             Value="{Binding ImportPercent}"
+                                             Height="8"
+                                             Margin="{DynamicResource Token.Thickness.Sm}" />
+                                <TextBlock Text="{Binding ImportPercentText}"
+                                           FontSize="{DynamicResource Token.Font.Caption}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                                <TextBlock Text="{Binding ImportDetailText}"
+                                           TextWrapping="Wrap"
+                                           FontSize="{DynamicResource Token.Font.Caption}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                                <TextBlock Text="{Binding ImportFailureText}"
+                                           TextWrapping="Wrap"
+                                           FontWeight="{DynamicResource Token.Weight.Bold}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
                     <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding InputChannelTitle}" />
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
