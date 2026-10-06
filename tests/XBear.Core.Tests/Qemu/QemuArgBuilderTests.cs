@@ -84,7 +84,7 @@ public sealed class QemuArgBuilderTests
         var arguments = CreateBuilder().BuildStartArguments(CreateSpec(), DiskPath, new AllocatedPorts(5555, 5556, 5900));
 
         Assert.Equal("whpx", ReadValue(arguments, "-accel"));
-        Assert.Equal("host", ReadValue(arguments, "-cpu"));
+        Assert.Equal(QemuArgBuilder.PlatformDefaultCpuModel, ReadValue(arguments, "-cpu"));
         Assert.Equal("4", ReadValue(arguments, "-smp"));
         Assert.Equal("4096", ReadValue(arguments, "-m"));
         Assert.Equal("none", ReadValue(arguments, "-display"));
@@ -521,5 +521,171 @@ public sealed class QemuArgBuilderTests
 
         Assert.Equal("none", ReadValue(arguments, "-display"));
         Assert.Contains("-vnc", arguments);
+    }
+
+    /// <summary>断言参数中不存在被实测判定不可用的宿主直传 CPU 型号。</summary>
+    private static void AssertNoHostCpuModel(IReadOnlyList<string> arguments)
+    {
+        var cpuModel = ReadValue(arguments, "-cpu").Split(',')[0].Trim();
+        Assert.False(
+            string.Equals("host", cpuModel, StringComparison.OrdinalIgnoreCase),
+            $"参数中出现了宿主直传 CPU 型号：{string.Join(" ", arguments)}");
+    }
+
+    /// <summary>取规格里将要使用的 CPU 型号，未声明时留空。</summary>
+    private static InstanceSpec CreateSpecWithCpuModel(string? cpuModel)
+    {
+        var spec = CreateSpec();
+        spec.Resources.CpuModel = cpuModel;
+        return spec;
+    }
+
+    private static IReadOnlyList<string> BuildWithCpuModel(string? cpuModel)
+        => CreateBuilder()
+            .BuildStartArguments(CreateSpecWithCpuModel(cpuModel), DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+    [Fact]
+    public void 声明CpuModel时取声明值()
+    {
+        var arguments = BuildWithCpuModel(QemuArgBuilder.PlatformDefaultCpuModel + ",+ssse3");
+
+        Assert.Equal(QemuArgBuilder.PlatformDefaultCpuModel + ",+ssse3", ReadValue(arguments, "-cpu"));
+    }
+
+    [Fact]
+    public void 未声明CpuModel时取平台默认选型()
+    {
+        var arguments = BuildWithCpuModel(null);
+
+        Assert.Equal(QemuArgBuilder.PlatformDefaultCpuModel, ReadValue(arguments, "-cpu"));
+        AssertNoHostCpuModel(arguments);
+    }
+
+    [Theory]
+    [InlineData("host")]
+    [InlineData("HOST")]
+    [InlineData("  host  ")]
+    [InlineData("Host,+ssse3")]
+    public void 宿主直传CpuModel一律被拒且异常为规格类(string declared)
+    {
+        var exception = Assert.Throws<XBearException>(() => BuildWithCpuModel(declared));
+
+        Assert.Equal(ErrorCategory.Spec, exception.Category);
+        Assert.False(string.IsNullOrWhiteSpace(exception.Remediation));
+    }
+
+    /// <summary>
+    /// 正确性属性：任何型号声明要么被拒绝、要么产出的参数里不含宿主直传型号。
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("host")]
+    [InlineData("HOST")]
+    [InlineData("  host  ")]
+    [InlineData("Host,+ssse3")]
+    [InlineData("qemu64")]
+    [InlineData("SomeUnverifiedModel")]
+    [InlineData(QemuArgBuilder.PlatformDefaultCpuModel)]
+    [InlineData(QemuArgBuilder.PlatformDefaultCpuModel + ",+ssse3")]
+    public void 所有分支下都不产出宿主直传Cpu(string? declared)
+    {
+        IReadOnlyList<string>? arguments = null;
+        var exception = Record.Exception(() => arguments = BuildWithCpuModel(declared));
+
+        if (exception is null)
+        {
+            AssertNoHostCpuModel(arguments!);
+        }
+    }
+
+    [Fact]
+    public void 缺必需指令集的型号被拒且说明缺失指令集()
+    {
+        var exception = Assert.Throws<XBearException>(() => QemuArgBuilder.ValidateCpuModel("qemu64"));
+
+        Assert.Equal(ErrorCategory.Spec, exception.Category);
+        Assert.Contains(QemuArgBuilder.RequiredCpuFeature, exception.Message, StringComparison.Ordinal);
+        Assert.False(string.IsNullOrWhiteSpace(exception.Remediation));
+    }
+
+    [Fact]
+    public void 已验证型号通过前置校验()
+    {
+        QemuArgBuilder.ValidateCpuModel(QemuArgBuilder.PlatformDefaultCpuModel);
+    }
+
+    /// <summary>
+    /// 特性后缀不属于基础型号，校验必须先剥掉后缀再比对基础型号，
+    /// 否则带后缀的已验证型号会被误判为未验证。
+    /// </summary>
+    [Fact]
+    public void 特性后缀写法剥离后落到基础型号()
+    {
+        QemuArgBuilder.ValidateCpuModel(QemuArgBuilder.PlatformDefaultCpuModel + ",+ssse3");
+
+        var exception = Assert.Throws<XBearException>(
+            () => QemuArgBuilder.ValidateCpuModel("qemu64,+ssse3"));
+        Assert.Equal(ErrorCategory.Spec, exception.Category);
+    }
+
+    /// <summary>显式关闭必需指令集的写法会导致镜像拒绝引导，必须在前置校验阶段拦下。</summary>
+    [Fact]
+    public void 显式关闭必需指令集的后缀被拒()
+    {
+        var exception = Assert.Throws<XBearException>(
+            () => QemuArgBuilder.ValidateCpuModel(QemuArgBuilder.PlatformDefaultCpuModel + ",-sse4.2"));
+
+        Assert.Equal(ErrorCategory.Spec, exception.Category);
+        Assert.Contains(QemuArgBuilder.RequiredCpuFeature, exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void 未验证型号被拒而非默认放行()
+    {
+        var exception = Assert.Throws<XBearException>(() => QemuArgBuilder.ValidateCpuModel("SomeUnverifiedModel"));
+
+        Assert.Equal(ErrorCategory.Spec, exception.Category);
+        Assert.False(string.IsNullOrWhiteSpace(exception.Remediation));
+    }
+
+    [Fact]
+    public void 空白型号被拒()
+    {
+        var exception = Assert.Throws<XBearException>(() => QemuArgBuilder.ValidateCpuModel("   "));
+
+        Assert.Equal(ErrorCategory.Spec, exception.Category);
+    }
+
+    [Fact]
+    public void 硬件加速可用时走whpx路径()
+    {
+        var builder = new QemuArgBuilder(whpxAvailable: true);
+
+        var arguments = builder
+            .BuildStartArguments(CreateSpec(), DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(QemuArgBuilder.WhpxAccelerator, ReadValue(arguments, "-accel"));
+        Assert.False(builder.IsSoftwareFallback);
+    }
+
+    [Fact]
+    public void 硬件加速不可用时回退tcg且路径可区分()
+    {
+        var builder = new QemuArgBuilder(whpxAvailable: false);
+
+        var arguments = builder
+            .BuildStartArguments(CreateSpec(), DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(QemuArgBuilder.TcgAccelerator, ReadValue(arguments, "-accel"));
+        Assert.True(builder.IsSoftwareFallback);
+    }
+
+    [Fact]
+    public void 加速器决策与参数形态一致()
+    {
+        Assert.Equal(QemuArgBuilder.WhpxAccelerator, QemuArgBuilder.ResolveAccelerator(true));
+        Assert.Equal(QemuArgBuilder.TcgAccelerator, QemuArgBuilder.ResolveAccelerator(false));
     }
 }

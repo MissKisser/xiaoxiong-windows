@@ -31,8 +31,124 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
     /// <summary>VNC 显示号的基准端口，显示号为 N 时实际监听该基准加 N。</summary>
     public const int VncDisplayBasePort = 5900;
 
+    /// <summary>平台默认 CPU 型号选型：已验证可引导 Android-x86 系镜像的型号。</summary>
+    public const string PlatformDefaultCpuModel = "Skylake-Client";
+
+    /// <summary>Windows Hypervisor Platform 加速器标识，为首选加速路径。</summary>
+    public const string WhpxAccelerator = "whpx";
+
+    /// <summary>纯软件模拟加速器标识，硬件加速不可用时的回退路径。</summary>
+    public const string TcgAccelerator = "tcg";
+
+    /// <summary>Android-x86 系镜像引导程序要求的最低 CPU 指令集。</summary>
+    public const string RequiredCpuFeature = "SSE4.2";
+
     private const string NetworkDeviceId = "net0";
     private const string QemuUserNetPrefix = "user";
+
+    /// <summary>直传宿主 CPU 的 QEMU 型号写法，在本产品支持的平台上已被实测判定不可用。</summary>
+    private const string HostCpuModel = "host";
+
+    /// <summary>
+    /// 已实测验证可引导目标镜像的 CPU 型号集合。
+    /// 集合之外一律拒绝，避免把未经验证的选型交给用户在启动失败后自行排查。
+    /// </summary>
+    private static readonly HashSet<string> VerifiedCpuModels =
+        new(StringComparer.OrdinalIgnoreCase) { PlatformDefaultCpuModel };
+
+    /// <summary>已确认缺少 <see cref="RequiredCpuFeature"/> 的型号，这些型号会被引导程序判定为不支持而主动中止引导。</summary>
+    private static readonly HashSet<string> ModelsMissingRequiredFeature =
+        new(StringComparer.OrdinalIgnoreCase) { "qemu64" };
+
+    private readonly bool whpxAvailable;
+
+    /// <summary>创建参数生成器。</summary>
+    /// <param name="whpxAvailable">
+    /// 宿主 Windows Hypervisor Platform 是否可用。该判定需要查询系统组件状态，超出纯参数生成的职责范围，
+    /// 由调用方探测后传入；缺省按可用处理。
+    /// </param>
+    public QemuArgBuilder(bool whpxAvailable = true) => this.whpxAvailable = whpxAvailable;
+
+    /// <summary>
+    /// 是否落在纯软件模拟回退路径。
+    /// 供调用方在启动前提示一次性能降级，避免回退被静默吞掉，同时不在每次启动时弹窗。
+    /// </summary>
+    public bool IsSoftwareFallback => !whpxAvailable;
+
+    /// <summary>按加速路径可用性选出 <c>-accel</c> 取值。</summary>
+    /// <param name="whpxAvailable">硬件加速是否可用。</param>
+    /// <returns>硬件加速可用时返回 <see cref="WhpxAccelerator"/>，否则返回 <see cref="TcgAccelerator"/>。</returns>
+    public static string ResolveAccelerator(bool whpxAvailable)
+        => whpxAvailable ? WhpxAccelerator : TcgAccelerator;
+
+    /// <summary>解析实例将实际使用的 CPU 型号，未声明时回落到平台默认选型。</summary>
+    /// <param name="declaredCpuModel">实例声明的 CPU 型号，可为空。</param>
+    /// <returns>去掉首尾空白后的型号；声明为空或仅含空白时返回 <see cref="PlatformDefaultCpuModel"/>。</returns>
+    public static string ResolveCpuModel(string? declaredCpuModel)
+        => string.IsNullOrWhiteSpace(declaredCpuModel)
+            ? PlatformDefaultCpuModel
+            : declaredCpuModel.Trim();
+
+    /// <summary>
+    /// 校验 CPU 型号是否满足目标镜像的启动前置条件，为不依赖文件系统与进程的纯函数。
+    /// 判定顺序为：拒绝直传宿主型号、拒绝显式关闭必需指令集、拒绝缺少必需指令集的型号、拒绝未验证型号。
+    /// </summary>
+    /// <param name="cpuModel">待校验的 CPU 型号，可带 <c>+特性</c> 与 <c>-特性</c> 后缀。</param>
+    /// <exception cref="XBearException">
+    /// 型号不可用时抛出 <see cref="ErrorCategory.Spec"/>：
+    /// 使用 <see cref="HostCpuModel"/>、显式关闭 <see cref="RequiredCpuFeature"/>、
+    /// 缺少 <see cref="RequiredCpuFeature"/>、或不在已验证集合内。
+    /// </exception>
+    public static void ValidateCpuModel(string cpuModel)
+    {
+        if (string.IsNullOrWhiteSpace(cpuModel))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                "CPU 型号不能为空。",
+                $"请把 resources.cpuModel 设为 {PlatformDefaultCpuModel}，或删除该字段使用平台默认选型。");
+        }
+
+        var declaration = cpuModel.Trim();
+        var separator = declaration.IndexOf(',', StringComparison.Ordinal);
+        var model = (separator < 0 ? declaration : declaration[..separator]).Trim();
+        var features = separator < 0
+            ? Array.Empty<string>()
+            : declaration[(separator + 1)..].Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+        if (string.Equals(model, HostCpuModel, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"CPU 型号 {model} 不可用：本产品支持的平台上直传宿主处理器会导致加速器初始化失败。",
+                $"请把 resources.cpuModel 改为 {PlatformDefaultCpuModel}，该型号已验证可引导目标镜像。");
+        }
+
+        if (features.Any(feature =>
+                string.Equals(feature.Trim(), "-" + RequiredCpuFeature, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"CPU 型号 {declaration} 显式关闭了 {RequiredCpuFeature}，镜像引导程序会判定为不支持并中止引导。",
+                $"请从 resources.cpuModel 中去掉 -{RequiredCpuFeature} 相关特性后缀。");
+        }
+
+        if (ModelsMissingRequiredFeature.Contains(model))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"CPU 型号 {model} 不支持 {RequiredCpuFeature}，镜像引导程序会判定为不支持并中止引导。",
+                $"请把 resources.cpuModel 改为 {PlatformDefaultCpuModel} 或其他含 {RequiredCpuFeature} 的已验证型号。");
+        }
+
+        if (!VerifiedCpuModels.Contains(model))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"CPU 型号 {model} 未在已验证列表内，无法确认其含 {RequiredCpuFeature} 且可引导目标镜像。",
+                $"请把 resources.cpuModel 改为 {PlatformDefaultCpuModel}，或在完成实测引导后扩充已验证列表。");
+        }
+    }
 
     private static readonly Regex FixedAddressPattern =
         new(@"^10\.0\.2\.[0-9]{1,3}$", RegexOptions.CultureInvariant);
@@ -81,12 +197,15 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         ValidatePort(ports.Qmp, nameof(ports.Qmp));
         ValidatePort(ports.Vnc, nameof(ports.Vnc));
 
+        var cpuModel = ResolveCpuModel(spec.Resources.CpuModel);
+        ValidateCpuModel(cpuModel);
+
         var arguments = new List<string>
         {
             "-accel",
-            "whpx",
+            ResolveAccelerator(whpxAvailable),
             "-cpu",
-            "host",
+            cpuModel,
             "-smp",
             spec.Resources.CpuCores.ToString(CultureInfo.InvariantCulture),
             "-m",

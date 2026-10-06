@@ -46,6 +46,13 @@ public sealed class ResourceSpec
 
     [JsonPropertyName("diskGB")]
     public int DiskGB { get; set; } = 32;
+
+    /// <summary>
+    /// QEMU -cpu 型号。为 null 时由平台按镜像的指令集要求选型。
+    /// Android-x86 系镜像要求 SSE4.2，QEMU 默认 qemu64 缺失该指令集会导致系统主动拒绝引导。
+    /// </summary>
+    [JsonPropertyName("cpuModel")]
+    public string? CpuModel { get; set; }
 }
 
 /// <summary>实例网络配置。</summary>
