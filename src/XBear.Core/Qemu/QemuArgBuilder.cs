@@ -287,15 +287,19 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         }
     }
 
-    /// <summary>转义 QEMU 选项值中的逗号与等号，避免破坏参数结构。</summary>
+    /// <summary>
+    /// 转义 QEMU keyval 格式选项值中的分隔符，避免破坏参数结构。
+    /// 逗号是 QEMU 的选项分隔符，值内出现逗号时必须重复输出一个逗号；
+    /// 等号只用于分隔选项名与取值，取值内部的等号是字面量、不作任何转义。
+    /// </summary>
     /// <param name="value">原始取值。</param>
-    /// <returns>转义后的取值。</returns>
+    /// <returns>转义后的取值，逗号已重复、等号保持原样。</returns>
     private static string EscapeOptionValue(string value)
     {
         var builder = new StringBuilder(value.Length);
         foreach (var character in value)
         {
-            if (character is ',' or '=')
+            if (character == ',')
             {
                 builder.Append(character);
             }

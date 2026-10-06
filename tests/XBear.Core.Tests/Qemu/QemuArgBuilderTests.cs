@@ -264,14 +264,146 @@ public sealed class QemuArgBuilderTests
         Assert.Equal(ErrorCategory.Spec, exception.Category);
     }
 
+    /// <summary>取 -drive 参数中 file= 取值部分，不含尾部固定的 if 与 format 段。</summary>
+    private static string ReadDriveFileValue(IReadOnlyList<string> arguments)
+    {
+        const string prefix = "file=";
+        const string suffix = ",if=virtio,format=qcow2";
+
+        var drive = ReadValue(arguments, "-drive");
+        Assert.StartsWith(prefix, drive, StringComparison.Ordinal);
+        Assert.EndsWith(suffix, drive, StringComparison.Ordinal);
+
+        var length = drive.Length - prefix.Length - suffix.Length;
+        return drive.Substring(prefix.Length, length);
+    }
+
+    /// <summary>
+    /// 磁盘路径里的逗号与等号按 QEMU keyval 规则处理。
+    /// QEMU 的 get_opt_value 只处理逗号：值内出现逗号时必须重复输出一个逗号，
+    /// 否则被当成新选项的分隔符。get_opt_name_value 用 strcspn(params, "=,")
+    /// 把选项名截到第一个等号或逗号，随后恰好跳过一个等号，
+    /// 之后的取值全部交给 get_opt_value，因此值内的等号是纯字面量、不重复。
+    /// </summary>
+    [Theory]
+    [InlineData(@"D:\xbear,odd\overlay.qcow2", @"D:\xbear,,odd\overlay.qcow2")]
+    [InlineData(@"D:\xbear\odd\a=b.qcow2", @"D:\xbear\odd\a=b.qcow2")]
+    [InlineData(@"D:\xbear,odd\dir\a=b.qcow2", @"D:\xbear,,odd\dir\a=b.qcow2")]
+    [InlineData(@"D:\xbear\instance-1\overlay.qcow2", @"D:\xbear\instance-1\overlay.qcow2")]
+    public void 磁盘路径转义只重复逗号且等号保持单个(string diskPath, string expectedFileValue)
+    {
+        var arguments = CreateBuilder()
+            .BuildStartArguments(CreateSpec(), diskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(expectedFileValue, ReadDriveFileValue(arguments));
+    }
+
+    /// <summary>逗号被重复后不得连带产生重复等号，否则 QEMU 会取到不存在的路径。</summary>
     [Fact]
-    public void 磁盘路径含逗号等字符时不会破坏参数结构()
+    public void 磁盘路径含等号时等号不被重复()
+    {
+        var arguments = CreateBuilder()
+            .BuildStartArguments(CreateSpec(), @"D:\xbear\odd\dir\a=b.qcow2", new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.DoesNotContain("==", ReadValue(arguments, "-drive"), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 黄金向量：不含分隔符的磁盘路径，回环暴露且无端口映射。
+    /// 依据 QEMU get_opt_name_value，file 取值在第一个逗号处结束，等号原样保留；
+    /// 依据 get_opt_value，值内不含逗号时无需重复。
+    /// </summary>
+    [Fact]
+    public void 黄金向量_无分隔符磁盘路径与回环网络()
+    {
+        var arguments = CreateBuilder().BuildStartArguments(CreateSpec(), DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(
+            @"file=D:\xbear\instance-1\overlay.qcow2,if=virtio,format=qcow2",
+            ReadValue(arguments, "-drive"));
+        Assert.Equal(
+            "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+            ReadNetDev(arguments));
+    }
+
+    /// <summary>
+    /// 黄金向量：磁盘路径含逗号。
+    /// 依据 QEMU get_opt_value 的注释，值内逗号必须重复输出一个逗号，
+    /// 否则逗号会被读成新选项的分隔符，取值在逗号处被截断。
+    /// </summary>
+    [Fact]
+    public void 黄金向量_磁盘路径含逗号时重复逗号()
+    {
+        var arguments = CreateBuilder()
+            .BuildStartArguments(CreateSpec(), @"D:\xbear,odd\overlay.qcow2", new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(
+            @"file=D:\xbear,,odd\overlay.qcow2,if=virtio,format=qcow2",
+            ReadValue(arguments, "-drive"));
+        Assert.Equal(
+            "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+            ReadNetDev(arguments));
+    }
+
+    /// <summary>
+    /// 黄金向量：磁盘路径含等号。
+    /// 依据 QEMU get_opt_name_value，选项名之后的取值由 get_opt_value 读取，
+    /// 而 get_opt_value 只重复逗号、不处理等号，所以等于号必须保持单个，
+    /// 重复等号会让 QEMU 取到 a==b 这样不存在的文件名。
+    /// </summary>
+    [Fact]
+    public void 黄金向量_磁盘路径含等号时等号保持单个()
+    {
+        var arguments = CreateBuilder()
+            .BuildStartArguments(CreateSpec(), @"D:\xbear\odd\dir\a=b.qcow2", new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(
+            @"file=D:\xbear\odd\dir\a=b.qcow2,if=virtio,format=qcow2",
+            ReadValue(arguments, "-drive"));
+        Assert.Equal(
+            "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+            ReadNetDev(arguments));
+    }
+
+    /// <summary>
+    /// 黄金向量：磁盘路径同时含逗号与等号。
+    /// 依据 QEMU get_opt_value 只重复逗号、依据 get_opt_name_value 取值内的等号为字面量，
+    /// 因此逗号被重复而等于号保持单个。
+    /// </summary>
+    [Fact]
+    public void 黄金向量_磁盘路径同时含逗号与等号()
     {
         var arguments = CreateBuilder()
             .BuildStartArguments(CreateSpec(), @"D:\xbear,odd\dir\a=b.qcow2", new AllocatedPorts(5555, 5556, 5900));
 
-        var drive = ReadValue(arguments, "-drive");
-        Assert.Contains(@"file=D:\xbear,,odd\dir\a==b.qcow2,if=virtio,format=qcow2", drive, StringComparison.Ordinal);
+        Assert.Equal(
+            @"file=D:\xbear,,odd\dir\a=b.qcow2,if=virtio,format=qcow2",
+            ReadValue(arguments, "-drive"));
+        Assert.Equal(
+            "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+            ReadNetDev(arguments));
+    }
+
+    /// <summary>
+    /// 黄金向量：固定地址、用户端口映射与内建 adb 转发共存。
+    /// -netdev 取值以逗号分隔各个子选项，固定地址与各条 hostfwd 的取值内不含逗号，
+    /// 因此整体拼接后可直接交由 QEMU get_opt_value 逐段解析，无需额外重复。
+    /// </summary>
+    [Fact]
+    public void 黄金向量_固定地址与端口映射共存()
+    {
+        var spec = CreateSpec("lan");
+        spec.Network!.FixedAddress = "10.0.2.15";
+        AddForward(spec, 6000, 6001, "tcp", null);
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(15555, 15556, 5901));
+
+        Assert.Equal(
+            @"file=D:\xbear\instance-1\overlay.qcow2,if=virtio,format=qcow2",
+            ReadValue(arguments, "-drive"));
+        Assert.Equal(
+            "user,id=net0,net=10.0.2.15/24,hostfwd=tcp:0.0.0.0:6000-:6001,hostfwd=tcp:0.0.0.0:15555-:5555",
+            ReadNetDev(arguments));
     }
 
     [Fact]
