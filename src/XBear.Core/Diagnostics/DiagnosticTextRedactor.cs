@@ -10,7 +10,7 @@ namespace XBear.Core.Diagnostics;
 /// 路径的形状（是否落在预期根目录下、是否指向真实存在的镜像位置）对故障定位有意义，
 /// 而其中的用户名没有，故只保留形状。
 /// </remarks>
-internal static class DiagnosticTextRedactor
+public static class DiagnosticTextRedactor
 {
     private const string UserProfilePlaceholder = "<USERPROFILE>";
     private const string AppDataPlaceholder = "<APPDATA>";
