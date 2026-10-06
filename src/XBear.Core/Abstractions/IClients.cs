@@ -70,6 +70,52 @@ public interface IInputChannel : IAsyncDisposable
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>探测结论，含失败原因，用于向用户如实告知而非静默卡住。</returns>
     Task<InputProbeResult> ProbeAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 取 guest 显示尺寸。优先用调用方已知的尺寸，其次从 QMP 截图命令回读的图像尺寸得到，
+    /// 都没有时返回 null，由调用方决定后续行为。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>guest 显示尺寸，无法确定时为 null。</returns>
+    Task<ScreenGeometry?> GetGeometryAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>投递单步触摸，可只发按下、只发移动或只发抬起。</summary>
+    /// <param name="point">触摸点，取值为调用方坐标系下的坐标。</param>
+    /// <param name="phase">触摸阶段。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>投递结论，含实际生效通路与降级原因。</returns>
+    Task<InputDispatchResult> TouchAsync(
+        InputPoint point,
+        TouchPhase phase,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>投递一次完整触摸，由按下与抬起两步组成。</summary>
+    /// <param name="point">触摸点，取值为调用方坐标系下的坐标。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>投递结论，含实际生效通路与降级原因。</returns>
+    Task<InputDispatchResult> TapAsync(InputPoint point, CancellationToken cancellationToken = default);
+
+    /// <summary>投递带时长的滑动，从起点经若干移动步到达终点后抬起。</summary>
+    /// <param name="from">起点，取值为调用方坐标系下的坐标。</param>
+    /// <param name="to">终点，取值为调用方坐标系下的坐标。</param>
+    /// <param name="duration">滑动时长，必须为正值。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>投递结论，含实际生效通路与降级原因。</returns>
+    Task<InputDispatchResult> SwipeAsync(
+        InputPoint from,
+        InputPoint to,
+        TimeSpan duration,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>投递按键。</summary>
+    /// <param name="key">按键及其在两条通路下的编码。</param>
+    /// <param name="action">按下或抬起。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>投递结论，含实际生效通路与降级原因。</returns>
+    Task<InputDispatchResult> KeyAsync(
+        VirtualKey key,
+        KeyAction action,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>输入通路种类。</summary>
@@ -93,6 +139,113 @@ public enum InputChannelKind
 /// <param name="NativeFailure">原生通路的失败原因，可用时为空。</param>
 /// <param name="ProjectionFailure">投屏通路的失败原因，可用时为空。</param>
 public sealed record InputProbeResult(
+    InputChannelKind Channel,
+    string? NativeFailure = null,
+    string? ProjectionFailure = null);
+
+/// <summary>画面中的一个点，单位与调用方的坐标系一致，尚未换算到 guest 显示分辨率。</summary>
+/// <param name="X">横坐标，允许超出画面范围，越界部分由坐标映射夹取。</param>
+/// <param name="Y">纵坐标，允许超出画面范围，越界部分由坐标映射夹取。</param>
+public readonly record struct InputPoint(double X, double Y);
+
+/// <summary>画面尺寸，单位为像素，可表示宿主画面尺寸或 guest 显示尺寸。</summary>
+/// <param name="Width">宽度像素。</param>
+/// <param name="Height">高度像素。</param>
+public readonly record struct ScreenGeometry(int Width, int Height)
+{
+    /// <summary>是否为可用于坐标换算的正尺寸。</summary>
+    public bool IsValid => Width > 0 && Height > 0;
+}
+
+/// <summary>一次触摸的阶段。</summary>
+public enum TouchPhase
+{
+    /// <summary>按下。</summary>
+    Down = 0,
+
+    /// <summary>移动。</summary>
+    Move = 1,
+
+    /// <summary>抬起。</summary>
+    Up = 2
+}
+
+/// <summary>按键动作。</summary>
+public enum KeyAction
+{
+    /// <summary>按下。</summary>
+    Press = 0,
+
+    /// <summary>抬起。</summary>
+    Release = 1
+}
+
+/// <summary>按键标识，取实例侧的按键名，与界面上的按键一一对应。</summary>
+public enum AndroidKey
+{
+    /// <summary>返回键。</summary>
+    Back = 0,
+
+    /// <summary>主页键。</summary>
+    Home,
+
+    /// <summary>任务切换键。</summary>
+    AppSwitch,
+
+    /// <summary>回车键。</summary>
+    Enter,
+
+    /// <summary>删除键。</summary>
+    Delete,
+
+    /// <summary>菜单键。</summary>
+    Menu,
+
+    /// <summary>制表键。</summary>
+    Tab,
+
+    /// <summary>空格键。</summary>
+    Space,
+
+    /// <summary>方向键中心。</summary>
+    DpadCenter,
+
+    /// <summary>方向键上。</summary>
+    ArrowUp,
+
+    /// <summary>方向键下。</summary>
+    ArrowDown,
+
+    /// <summary>方向键左。</summary>
+    ArrowLeft,
+
+    /// <summary>方向键右。</summary>
+    ArrowRight,
+
+    /// <summary>音量加键。</summary>
+    VolumeUp,
+
+    /// <summary>音量减键。</summary>
+    VolumeDown,
+
+    /// <summary>电源键。</summary>
+    Power
+}
+
+/// <summary>
+/// 一个按键在两条输入通路下的编码。实例侧按键码供投屏通路的输入命令使用，
+/// 宿主侧输入事件码供原生通路的输入事件使用，两者由同一张按键表产出，避免两处各写一份映射。
+/// </summary>
+/// <param name="Key">按键标识。</param>
+/// <param name="AndroidKeyCode">实例侧按键码。</param>
+/// <param name="LinuxKeyCode">宿主侧输入事件码。</param>
+public readonly record struct VirtualKey(AndroidKey Key, int AndroidKeyCode, int LinuxKeyCode);
+
+/// <summary>一次输入投递的结论。</summary>
+/// <param name="Channel">实际生效的通路。</param>
+/// <param name="NativeFailure">原生通路的失败原因，可用时为空。</param>
+/// <param name="ProjectionFailure">投屏通路的失败原因，可用时为空。</param>
+public sealed record InputDispatchResult(
     InputChannelKind Channel,
     string? NativeFailure = null,
     string? ProjectionFailure = null);
