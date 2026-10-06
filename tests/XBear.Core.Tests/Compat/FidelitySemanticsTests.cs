@@ -205,13 +205,26 @@ public class FidelitySemanticsTests
     }
 
     [Fact]
-    public void SampleSha256IsDeclaredAsPlaceholderNotRealDigest()
+    public void SampleSha256IsRealDigestAfterIntegrityVerified()
     {
         var spec = SpecTestHost.Loader.ParseImage(SpecTestHost.ImageJson());
 
-        // 契约要求 sha256 为 64 位十六进制，占位值全零说明尚未实测。
+        // 契约要求 sha256 为 64 位十六进制。镜像完整性实测通过后该字段
+        // 必须回填为真实摘要，全零占位表示尚未校验，两者都不可接受。
         Assert.Equal(64, spec.Source.Sha256.Length);
-        Assert.Equal(new string('0', 64), spec.Source.Sha256);
+        Assert.Matches("^[0-9a-f]{64}$", spec.Source.Sha256);
+        Assert.NotEqual(new string('0', 64), spec.Source.Sha256);
+    }
+
+    [Fact]
+    public void SampleSizeMatchesDeclaredSourceSize()
+    {
+        var spec = SpecTestHost.Loader.ParseImage(SpecTestHost.ImageJson());
+
+        // 文件大小是完整性判定的另一半，摘要正确而大小写错同样会误判为损坏。
+        Assert.True(
+            spec.Source.SizeBytes > 0,
+            "sizeBytes 必须为正数，否则完整性校验失去意义。");
     }
 
     [Fact]
