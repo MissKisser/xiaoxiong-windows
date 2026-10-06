@@ -1,0 +1,21 @@
+# 默认按文本处理，入库统一为 LF，检出时按平台转换
+* text=auto
+
+# JSON / C# / 文档不使用 CRLF，保持跨端一致
+*.json text eol=lf
+*.cs text eol=lf
+*.csproj text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# 二进制，禁止行尾转换
+*.dll binary
+*.exe binary
+*.pdb binary
+*.7z binary
+*.iso binary
+*.qcow2 binary
+*.png binary
+*.jpg binary
+*.zip binary

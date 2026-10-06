@@ -1,0 +1,43 @@
+# .NET 构建产物
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+artifacts/
+publish/
+
+# IDE
+.vs/
+.idea/
+*.sln.docstates
+
+# QEMU 镜像与运行时数据（体积大且具实例特征，严禁入库）
+*.qcow2
+*.qcow2.raw
+*.img
+*.iso
+*.vmdk
+instances/
+runtime/
+snapshots/
+images/
+firmware/
+bios/
+
+# 日志与诊断
+*.log
+logs/
+diagnostics/
+*.dmp
+
+# 密钥与本地配置（严禁入库）
+*.key
+*.pem
+*.p12
+secrets.json
+appsettings.Local.json
+
+# 工具缓存
+node_modules/
