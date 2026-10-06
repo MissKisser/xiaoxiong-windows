@@ -17,21 +17,21 @@
             <Style TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{DynamicResource Token.Color.Text.Primary}" />
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Body}" />
-                <Setter Property="Margin" Value="{DynamicResource Token.Space.Sm}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Sm}" />
             </Style>
 
             <Style x:Key="SectionTitle" TargetType="TextBlock">
                 <Setter Property="Foreground" Value="{DynamicResource Token.Color.Brand.Primary}" />
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Subtitle}" />
                 <Setter Property="FontWeight" Value="{DynamicResource Token.Weight.Medium}" />
-                <Setter Property="Margin" Value="{DynamicResource Token.Space.Sm}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Sm}" />
             </Style>
 
             <Style TargetType="Button">
                 <Setter Property="Background" Value="{DynamicResource Token.Color.Brand.Primary}" />
                 <Setter Property="Foreground" Value="{DynamicResource Token.Color.Text.Inverse}" />
-                <Setter Property="Padding" Value="{DynamicResource Token.Space.Sm}" />
-                <Setter Property="Margin" Value="{DynamicResource Token.Space.Xs}" />
+                <Setter Property="Padding" Value="{DynamicResource Token.Thickness.Sm}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Xs}" />
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Body}" />
                 <Setter Property="Cursor" Value="Hand" />
             </Style>
@@ -40,35 +40,35 @@
                 <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Raised}" />
                 <Setter Property="Foreground" Value="{DynamicResource Token.Color.Text.Primary}" />
                 <Setter Property="BorderBrush" Value="{DynamicResource Token.Color.Text.Secondary}" />
-                <Setter Property="Padding" Value="{DynamicResource Token.Space.Xs}" />
-                <Setter Property="Margin" Value="{DynamicResource Token.Space.Xs}" />
+                <Setter Property="Padding" Value="{DynamicResource Token.Thickness.Xs}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Xs}" />
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Body}" />
             </Style>
 
             <Style TargetType="ComboBox">
                 <Setter Property="Foreground" Value="{DynamicResource Token.Color.Text.Primary}" />
                 <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Raised}" />
-                <Setter Property="Padding" Value="{DynamicResource Token.Space.Xs}" />
-                <Setter Property="Margin" Value="{DynamicResource Token.Space.Xs}" />
+                <Setter Property="Padding" Value="{DynamicResource Token.Thickness.Xs}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Xs}" />
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Body}" />
             </Style>
 
             <Style TargetType="CheckBox">
                 <Setter Property="Foreground" Value="{DynamicResource Token.Color.Text.Primary}" />
-                <Setter Property="Margin" Value="{DynamicResource Token.Space.Sm}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Sm}" />
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Body}" />
             </Style>
 
             <Style x:Key="RiskBanner" TargetType="Border">
                 <Setter Property="Background" Value="{DynamicResource Token.Color.State.Danger}" />
-                <Setter Property="Padding" Value="{DynamicResource Token.Space.Md}" />
-                <Setter Property="Margin" Value="{DynamicResource Token.Space.Md}" />
+                <Setter Property="Padding" Value="{DynamicResource Token.Thickness.Md}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Md}" />
             </Style>
 
             <Style x:Key="Card" TargetType="Border">
                 <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Raised}" />
-                <Setter Property="Padding" Value="{DynamicResource Token.Space.Md}" />
-                <Setter Property="Margin" Value="{DynamicResource Token.Space.Md}" />
+                <Setter Property="Padding" Value="{DynamicResource Token.Thickness.Md}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Md}" />
                 <Setter Property="CornerRadius" Value="{DynamicResource Token.Radius.Md}" />
             </Style>
         </ResourceDictionary>

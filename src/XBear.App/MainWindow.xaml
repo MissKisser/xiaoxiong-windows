@@ -23,14 +23,14 @@
             </Grid.ColumnDefinitions>
 
             <!-- 左侧：实例列表 -->
-            <DockPanel Grid.Column="0" Margin="{DynamicResource Token.Space.Md}">
+            <DockPanel Grid.Column="0" Margin="{DynamicResource Token.Thickness.Md}">
                 <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionTitle}" Text="{Binding InstanceTerm}" />
                 <TextBox DockPanel.Dock="Top" IsReadOnly="True" Text="{Binding Selected.Id}" />
                 <ListBox ItemsSource="{Binding Instances}"
                          SelectedItem="{Binding Selected, Mode=TwoWay}">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <StackPanel Margin="{DynamicResource Token.Space.Sm}">
+                            <StackPanel Margin="{DynamicResource Token.Thickness.Sm}">
                                 <TextBlock Text="{Binding DisplayName}" FontSize="{DynamicResource Token.Font.Subtitle}" />
                                 <TextBlock Text="{Binding StateLabel}" FontSize="{DynamicResource Token.Font.Caption}"
                                            Foreground="{DynamicResource Token.Color.Text.Secondary}" />
@@ -60,7 +60,7 @@
                         <TextBlock Text="{Binding DetailText}" TextWrapping="Wrap" />
                     </Border>
 
-                    <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Space.Md}">
+                    <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Thickness.Md}">
                         <Button Content="{Binding StartTerm}" Command="{Binding StartSelectedCommand}" />
                         <Button Content="{Binding StopTerm}" Command="{Binding StopSelectedCommand}" />
                         <Button Content="{Binding CreateInstanceText}" Click="OnCreateInstance" />

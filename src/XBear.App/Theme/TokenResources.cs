@@ -46,6 +46,15 @@ public static class TokenResources
         Put(resources, "Space.Xl", tokens.Spacing("xl"));
         Put(resources, "Space.Xxl", tokens.Spacing("xxl"));
 
+        // Margin、Padding 等属性的类型是 Thickness，而令牌里的间距是单个数值。
+        // 同一数值另存一份 Thickness 形态，避免把 double 直接赋给 Thickness 属性时抛异常。
+        Put(resources, "Thickness.Xs", ThicknessOf(tokens.Spacing("xs")));
+        Put(resources, "Thickness.Sm", ThicknessOf(tokens.Spacing("sm")));
+        Put(resources, "Thickness.Md", ThicknessOf(tokens.Spacing("md")));
+        Put(resources, "Thickness.Lg", ThicknessOf(tokens.Spacing("lg")));
+        Put(resources, "Thickness.Xl", ThicknessOf(tokens.Spacing("xl")));
+        Put(resources, "Thickness.Xxl", ThicknessOf(tokens.Spacing("xxl")));
+
         Put(resources, "Font.Caption", (double)tokens.FontSize("caption"));
         Put(resources, "Font.Body", (double)tokens.FontSize("body"));
         Put(resources, "Font.Subtitle", (double)tokens.FontSize("subtitle"));
@@ -97,6 +106,14 @@ public static class TokenResources
 
     private static FontFamily FontFamilyOf(string value) =>
         new(value.Split(',')[0].Trim());
+
+    /// <summary>
+    /// 把单个间距数值转换为四边等距的粗细值。
+    /// </summary>
+    /// <param name="spacing">令牌中的间距数值。</param>
+    /// <returns>四边相同的 <see cref="Thickness"/>。</returns>
+    private static Thickness ThicknessOf(double spacing) =>
+        new(spacing);
 
     /// <summary>
     /// 按数值取字重。令牌里的 400、500、700 对应 WPF 的标准字重档位。

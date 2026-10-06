@@ -4,7 +4,7 @@
         Title="{Binding DialogTitle}" Height="640" Width="720"
         WindowStartupLocation="CenterOwner">
     <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="{DynamicResource Token.Space.Lg}">
+        <StackPanel Margin="{DynamicResource Token.Thickness.Lg}">
             <TextBlock Style="{StaticResource SectionTitle}" Text="基本信息" />
             <TextBlock Text="{Binding InstanceTerm}" />
             <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />

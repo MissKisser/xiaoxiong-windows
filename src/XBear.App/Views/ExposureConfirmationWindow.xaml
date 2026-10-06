@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="确认暴露级别" Height="320" Width="560"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
-    <StackPanel Margin="{DynamicResource Token.Space.Lg}">
+    <StackPanel Margin="{DynamicResource Token.Thickness.Lg}">
         <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ExposureTerm}" />
 
         <Border Style="{StaticResource Card}">
