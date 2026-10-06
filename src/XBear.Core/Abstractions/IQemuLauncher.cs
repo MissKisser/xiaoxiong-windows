@@ -78,4 +78,18 @@ public interface IQcow2Manager
     /// <param name="overlayPath">overlay 路径。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     Task<bool> ValidateChainAsync(string overlayPath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 把任意格式的镜像导入为 qcow2 base，供后续实例在其上叠 overlay。
+    /// 目标已是可用的 qcow2 base 时不重复转换。
+    /// </summary>
+    /// <param name="sourceImagePath">源镜像路径，可为 ISO、raw 或 qcow2。</param>
+    /// <param name="baseImagePath">待生成或已存在的 qcow2 base 镜像路径。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>本次真正执行转换返回 true；目标已可用、未重复转换返回 false。</returns>
+    Task<bool> ImportBaseImageAsync(
+        string sourceImagePath,
+        string baseImagePath,
+        CancellationToken cancellationToken = default)
+        => throw new NotSupportedException("当前实现未提供镜像导入能力。");
 }
