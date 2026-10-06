@@ -1,0 +1,369 @@
+using XBear.Core.Diagnostics;
+
+namespace XBear.Core.Spec;
+
+/// <summary>单条校验错误，携带实例路径与失败原因。</summary>
+public sealed class ValidationError
+{
+    /// <summary>出错位置在实例 JSON 中的路径，根节点为空串。</summary>
+    public string Path { get; }
+
+    /// <summary>失败原因描述。</summary>
+    public string Message { get; }
+
+    /// <summary>触发的校验关键字位置，便于定位规则来源。</summary>
+    public string KeywordLocation { get; }
+
+    /// <summary>
+    /// 创建一条校验错误。
+    /// </summary>
+    /// <param name="path">实例 JSON 中的出错路径。</param>
+    /// <param name="message">失败原因描述。</param>
+    /// <param name="keywordLocation">触发的校验关键字位置。</param>
+    public ValidationError(string path, string message, string keywordLocation = "")
+    {
+        Path = path;
+        Message = message;
+        KeywordLocation = keywordLocation;
+    }
+
+    /// <summary>返回可读的路径与原因组合。</summary>
+    /// <returns>形如 <c>/network/exposure: 取值不在枚举内</c> 的文本。</returns>
+    public override string ToString() =>
+        string.IsNullOrEmpty(Path) ? Message : $"{Path}: {Message}";
+}
+
+/// <summary>结构化校验结果，收集全部错误而非只抛一个异常。</summary>
+public sealed class ValidationResult
+{
+    /// <summary>校验所依据的 schema 文件名。</summary>
+    public string SchemaFileName { get; }
+
+    /// <summary>全部校验错误，无错误时为空集合。</summary>
+    public IReadOnlyList<ValidationError> Errors { get; }
+
+    /// <summary>是否通过校验。</summary>
+    public bool IsValid => Errors.Count == 0;
+
+    /// <summary>
+    /// 创建校验结果。
+    /// </summary>
+    /// <param name="schemaFileName">校验所依据的 schema 文件名。</param>
+    /// <param name="errors">校验错误集合。</param>
+    public ValidationResult(string schemaFileName, IReadOnlyList<ValidationError> errors)
+    {
+        SchemaFileName = schemaFileName;
+        Errors = errors ?? Array.Empty<ValidationError>();
+    }
+
+    /// <summary>
+    /// 校验通过时返回校验通过的实例，否则抛出规格类异常。
+    /// </summary>
+    /// <returns>同一个校验结果。</returns>
+    /// <exception cref="XBearException">校验未通过时抛出。</exception>
+    public ValidationResult EnsureValid()
+    {
+        if (IsValid)
+        {
+            return this;
+        }
+
+        throw ToException();
+    }
+
+    /// <summary>
+    /// 转换为规格类异常，错误分类为 <see cref="ErrorCategory.Spec"/>。
+    /// </summary>
+    /// <returns>携带全部错误明细的异常。</returns>
+    public XBearException ToException() =>
+        new(
+            ErrorCategory.Spec,
+            $"不符合 {SchemaFileName} 契约，共 {Errors.Count} 处问题：{DescribeErrors()}",
+            "跨端契约由共享规格定义，单端不得自行放宽 Schema 或改写样例来迁就。");
+
+    /// <summary>
+    /// 返回全部错误的可读摘要。
+    /// </summary>
+    /// <returns>以分号连接的错误文本。</returns>
+    public string DescribeErrors() =>
+        string.Join("；", Errors.Select(e => e.ToString()));
+}
+
+/// <summary>
+/// JSON Schema 求值器抽象。Core 工程不引用任何 Schema 库，
+/// 具体求值实现由引用了 Schema 库的装配注入。
+/// </summary>
+public interface ISchemaEvaluator
+{
+    /// <summary>
+    /// 对照给定 Schema 求值一份 JSON 文本。
+    /// </summary>
+    /// <param name="schemaJson">Schema 文件文本。</param>
+    /// <param name="instanceJson">待校验的 JSON 文本。</param>
+    /// <param name="schemaFileName">Schema 文件名，用于错误定位。</param>
+    /// <returns>校验错误集合，通过校验时为空集合。</returns>
+    IReadOnlyList<ValidationError> Evaluate(
+        string schemaJson,
+        string instanceJson,
+        string schemaFileName);
+}
+
+/// <summary>
+/// 实例配置与镜像清单的 Schema 校验入口。
+/// 校验结果为结构化对象，便于测试与上层逐条展示。
+/// </summary>
+public sealed class SpecValidator
+{
+    private readonly ISchemaEvaluator _evaluator;
+    private readonly SpecLoader _loader;
+
+    /// <summary>
+    /// 创建校验器。
+    /// </summary>
+    /// <param name="evaluator">Schema 求值器，不可为空。</param>
+    public SpecValidator(ISchemaEvaluator evaluator)
+        : this(evaluator, SpecLoader.Default)
+    {
+    }
+
+    /// <summary>
+    /// 创建校验器。
+    /// </summary>
+    /// <param name="evaluator">Schema 求值器，不可为空。</param>
+    /// <param name="loader">规格读取器。</param>
+    public SpecValidator(ISchemaEvaluator evaluator, SpecLoader loader)
+    {
+        _evaluator = evaluator ?? throw new XBearException(
+            ErrorCategory.Spec,
+            "Schema 求值器不能为空。");
+        _loader = loader ?? throw new XBearException(
+            ErrorCategory.Spec,
+            "规格读取器不能为空。");
+    }
+
+    /// <summary>
+    /// 校验实例配置 JSON。
+    /// </summary>
+    /// <param name="json">实例配置 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateInstance(string json) =>
+        ValidateAgainst(SpecLoader.InstanceSchemaFileName, json);
+
+    /// <summary>
+    /// 校验镜像清单 JSON。
+    /// </summary>
+    /// <param name="json">镜像清单 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateImage(string json) =>
+        ValidateAgainst(SpecLoader.ImageSchemaFileName, json);
+
+    /// <summary>
+    /// 校验术语表 JSON。
+    /// </summary>
+    /// <param name="json">术语表 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateTerminology(string json) =>
+        ValidateAgainst(SpecLoader.TerminologySchemaFileName, json);
+
+    /// <summary>
+    /// 校验样例文件，先做 Schema 校验再解析为强类型模型。
+    /// </summary>
+    /// <param name="fixtureFileName">样例文件名。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateFixture(string fixtureFileName)
+    {
+        var json = _loader.ReadFixtureText(fixtureFileName);
+        var schemaFileName = fixtureFileName.StartsWith("image", StringComparison.Ordinal)
+            ? SpecLoader.ImageSchemaFileName
+            : SpecLoader.InstanceSchemaFileName;
+
+        var result = ValidateAgainst(schemaFileName, json);
+        if (result.IsValid)
+        {
+            // 解析一次以确认样例可被强类型模型接受，解析失败会抛出规格类异常。
+            if (schemaFileName == SpecLoader.ImageSchemaFileName)
+            {
+                _loader.ParseImage(json);
+            }
+            else
+            {
+                _loader.ParseInstance(json);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 对照指定 Schema 文件校验任意 JSON 文本。
+    /// </summary>
+    /// <param name="schemaFileName">schema 文件名。</param>
+    /// <param name="json">待校验的 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateAgainst(string schemaFileName, string json)
+    {
+        var schemaJson = _loader.ReadSchemaText(schemaFileName);
+        var errors = _evaluator.Evaluate(schemaJson, json, schemaFileName);
+        return new ValidationResult(schemaFileName, errors);
+    }
+}
+
+/// <summary>术语违规项，记录命中的禁用近义词。</summary>
+public sealed class TerminologyViolation
+{
+    /// <summary>所属术语标识。</summary>
+    public string TermId { get; }
+
+    /// <summary>命中的禁用近义词。</summary>
+    public string ForbiddenWord { get; }
+
+    /// <summary>命中位置在文本中的起始下标。</summary>
+    public int Index { get; }
+
+    /// <summary>命中位置前后的上下文片段。</summary>
+    public string Context { get; }
+
+    /// <summary>
+    /// 创建一条术语违规项。
+    /// </summary>
+    /// <param name="termId">所属术语标识。</param>
+    /// <param name="forbiddenWord">命中的禁用近义词。</param>
+    /// <param name="index">命中位置在文本中的起始下标。</param>
+    /// <param name="context">命中位置前后的上下文片段。</param>
+    public TerminologyViolation(string termId, string forbiddenWord, int index, string context)
+    {
+        TermId = termId;
+        ForbiddenWord = forbiddenWord;
+        Index = index;
+        Context = context;
+    }
+
+    /// <summary>返回可读的违规描述。</summary>
+    /// <returns>形如 <c>术语 instance 禁用近义词「分身」，命中于「...」</c> 的文本。</returns>
+    public override string ToString() =>
+        $"术语 {TermId} 禁用近义词「{ForbiddenWord}」，命中于「{Context}」";
+}
+
+/// <summary>术语校验结果，收集全部禁用词命中。</summary>
+public sealed class TerminologyCheckResult
+{
+    /// <summary>全部违规项，无违规时为空集合。</summary>
+    public IReadOnlyList<TerminologyViolation> Violations { get; }
+
+    /// <summary>是否没有命中任何禁用近义词。</summary>
+    public bool IsValid => Violations.Count == 0;
+
+    /// <summary>
+    /// 创建术语校验结果。
+    /// </summary>
+    /// <param name="violations">违规项集合。</param>
+    public TerminologyCheckResult(IReadOnlyList<TerminologyViolation> violations)
+    {
+        Violations = violations ?? Array.Empty<TerminologyViolation>();
+    }
+
+    /// <summary>
+    /// 返回全部违规项的可读摘要。
+    /// </summary>
+    /// <returns>以分号连接的违规文本。</returns>
+    public string DescribeViolations() =>
+        string.Join("；", Violations.Select(v => v.ToString()));
+
+    /// <summary>
+    /// 无违规时返回校验通过的实例，否则抛出规格类异常。
+    /// </summary>
+    /// <returns>同一个校验结果。</returns>
+    /// <exception cref="XBearException">存在违规项时抛出。</exception>
+    public TerminologyCheckResult EnsureValid()
+    {
+        if (IsValid)
+        {
+            return this;
+        }
+
+        throw new XBearException(
+            ErrorCategory.Spec,
+            $"文本命中 {Violations.Count} 处禁用近义词：{DescribeViolations()}",
+            "按术语表统一措辞后重试；禁用词由双端术语表集中定义。");
+    }
+}
+
+/// <summary>
+/// 术语表校验器，禁止使用各术语的禁用近义词。
+/// 中文近义词按原文匹配，英文近义词忽略大小写匹配。
+/// </summary>
+public static class TerminologyValidator
+{
+    private const int ContextRadius = 12;
+
+    /// <summary>
+    /// 检查一段文本是否命中术语表中的禁用近义词。
+    /// </summary>
+    /// <param name="text">待检查文本。</param>
+    /// <param name="terminology">术语表文档。</param>
+    /// <returns>术语校验结果。</returns>
+    public static TerminologyCheckResult CheckText(string text, TerminologyDocument terminology)
+    {
+        if (terminology is null)
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                "术语表不能为空。");
+        }
+
+        if (string.IsNullOrEmpty(text))
+        {
+            return new TerminologyCheckResult(Array.Empty<TerminologyViolation>());
+        }
+
+        var violations = new List<TerminologyViolation>();
+
+        foreach (var term in terminology.Terms)
+        {
+            foreach (var forbidden in term.Forbidden)
+            {
+                if (string.IsNullOrWhiteSpace(forbidden))
+                {
+                    continue;
+                }
+
+                var comparison = IsAsciiWord(forbidden)
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+
+                var index = text.IndexOf(forbidden, comparison);
+                while (index >= 0)
+                {
+                    violations.Add(new TerminologyViolation(
+                        term.Id,
+                        forbidden,
+                        index,
+                        Slice(text, index, forbidden.Length)));
+                    index = text.IndexOf(forbidden, index + forbidden.Length, comparison);
+                }
+            }
+        }
+
+        return new TerminologyCheckResult(violations);
+    }
+
+    private static bool IsAsciiWord(string value)
+    {
+        foreach (var c in value)
+        {
+            if (c > (char)127)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string Slice(string text, int index, int length)
+    {
+        var start = Math.Max(0, index - ContextRadius);
+        var end = Math.Min(text.Length, index + length + ContextRadius);
+        return text[start..end];
+    }
+}

@@ -1,0 +1,77 @@
+﻿<Window x:Class="XBear.App.Views.InstanceEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding DialogTitle}" Height="640" Width="720"
+        WindowStartupLocation="CenterOwner">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="{DynamicResource Token.Space.Lg}">
+            <TextBlock Style="{StaticResource SectionTitle}" Text="基本信息" />
+            <TextBlock Text="{Binding InstanceTerm}" />
+            <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock Text="{Binding ImageTerm}" />
+            <ComboBox ItemsSource="{Binding Images}" SelectedItem="{Binding ImageRef}" />
+
+            <TextBlock Style="{StaticResource SectionTitle}" Text="资源" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0">
+                    <TextBlock Text="内存 MB" />
+                    <TextBox Text="{Binding MemoryMB, UpdateSourceTrigger=LostFocus}" />
+                </StackPanel>
+                <StackPanel Grid.Column="1">
+                    <TextBlock Text="CPU 核数" />
+                    <TextBox Text="{Binding CpuCores, UpdateSourceTrigger=LostFocus}" />
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="磁盘 GB" />
+                    <TextBox Text="{Binding DiskGB, UpdateSourceTrigger=LostFocus}" />
+                </StackPanel>
+            </Grid>
+
+            <TextBlock Style="{StaticResource SectionTitle}" Text="网络" />
+            <TextBlock Text="固定地址" />
+            <TextBox Text="{Binding FixedAddress, UpdateSourceTrigger=PropertyChanged}" />
+            <TextBlock Text="代理" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0" Text="{Binding ProxyHost, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBox Grid.Column="1" Text="{Binding ProxyPort, UpdateSourceTrigger=LostFocus}" />
+            </Grid>
+
+            <ItemsControl ItemsSource="{Binding PortForwards}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <StackPanel Orientation="Horizontal">
+                            <TextBox Width="120" Text="{Binding HostPort, UpdateSourceTrigger=LostFocus}" />
+                            <TextBox Width="120" Text="{Binding GuestPort, UpdateSourceTrigger=LostFocus}" />
+                            <ComboBox Width="120" ItemsSource="{Binding DataContext.Protocols, RelativeSource={RelativeSource AncestorType=Window}}" SelectedItem="{Binding Protocol}" />
+                        </StackPanel>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ExposureTerm}" />
+            <StackPanel>
+                <RadioButton GroupName="Exposure" Content="仅本机（loopback）" IsChecked="{Binding IsLoopbackSelected, Mode=TwoWay}" />
+                <RadioButton GroupName="Exposure" Content="局域网（lan）" IsChecked="{Binding IsLanSelected, Mode=TwoWay}" />
+                <RadioButton GroupName="Exposure" Content="公网（public）" IsChecked="{Binding IsPublicSelected, Mode=TwoWay}" />
+            </StackPanel>
+
+            <TextBlock Text="{Binding ValidationMessage}"
+                       Foreground="{DynamicResource Token.Color.State.Danger}"
+                       TextWrapping="Wrap" />
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button Content="{Binding CancelText}" Click="OnCancel" />
+                <Button Content="{Binding ConfirmText}" Click="OnCreate" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

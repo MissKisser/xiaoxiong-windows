@@ -1,0 +1,26 @@
+﻿<Window x:Class="XBear.App.Views.ExposureConfirmationWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="确认暴露级别" Height="320" Width="560"
+        WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
+    <StackPanel Margin="{DynamicResource Token.Space.Lg}">
+        <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ExposureTerm}" />
+
+        <Border Style="{StaticResource Card}">
+            <TextBlock Text="{Binding ConfirmationText}" TextWrapping="Wrap" />
+        </Border>
+
+        <TextBlock TextWrapping="Wrap"
+                   Foreground="{DynamicResource Token.Color.State.Danger}"
+                   FontWeight="{DynamicResource Token.Weight.Bold}"
+                   Text="该操作会把实例端口暴露给同网段乃至公网设备。若实例持有 Root 权限或已登录账号，风险显著放大。" />
+
+        <!-- 未勾选时确认按钮保持禁用，形成阻断式确认。 -->
+        <CheckBox Content="{Binding AcknowledgementText}" IsChecked="{Binding IsAcknowledged, Mode=TwoWay}" />
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="{Binding CancelText}" Click="OnCancel" />
+            <Button Content="{Binding ConfirmText}" Click="OnConfirm" IsEnabled="{Binding IsAcknowledged}" />
+        </StackPanel>
+    </StackPanel>
+</Window>

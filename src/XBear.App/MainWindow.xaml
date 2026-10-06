@@ -1,12 +1,102 @@
 ﻿<Window x:Class="XBear.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:XBear.App"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
+        Title="小熊模拟器" Height="720" Width="1180">
     <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
 
+        <!-- 顶部全局状态条：adb 端口实际监听 0.0.0.0 时持续显示风险，直到配置改回 loopback。 -->
+        <Border Grid.Row="0" Style="{StaticResource RiskBanner}" Visibility="{Binding HasRisk, Converter={StaticResource BoolToVisibility}}">
+            <TextBlock Text="{Binding RiskBannerText}"
+                       Foreground="{DynamicResource Token.Color.Text.Inverse}"
+                       FontSize="{DynamicResource Token.Font.Body}"
+                       TextWrapping="Wrap" />
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="380" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- 左侧：实例列表 -->
+            <DockPanel Grid.Column="0" Margin="{DynamicResource Token.Space.Md}">
+                <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionTitle}" Text="{Binding InstanceTerm}" />
+                <TextBox DockPanel.Dock="Top" IsReadOnly="True" Text="{Binding Selected.Id}" />
+                <ListBox ItemsSource="{Binding Instances}"
+                         SelectedItem="{Binding Selected, Mode=TwoWay}">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Margin="{DynamicResource Token.Space.Sm}">
+                                <TextBlock Text="{Binding DisplayName}" FontSize="{DynamicResource Token.Font.Subtitle}" />
+                                <TextBlock Text="{Binding StateLabel}" FontSize="{DynamicResource Token.Font.Caption}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                                <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}">
+                                    <Run Text="{Binding ImageDisplayName, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}">
+                                    <Run Text="Android " /><Run Text="{Binding AndroidVersion, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}">
+                                    <Run Text="{Binding ExposureLabel, Mode=OneWay}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+
+            <!-- 右侧：详情与操作区 -->
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="实例详情" />
+                    <Border Style="{StaticResource Card}">
+                        <TextBlock Text="{Binding DetailText}" TextWrapping="Wrap" />
+                    </Border>
+
+                    <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Space.Md}">
+                        <Button Content="{Binding StartTerm}" Command="{Binding StartSelectedCommand}" />
+                        <Button Content="{Binding StopTerm}" Command="{Binding StopSelectedCommand}" />
+                        <Button Content="{Binding CreateInstanceText}" Click="OnCreateInstance" />
+                        <Button Content="{Binding ExportDiagnosticsText}" Click="OnChooseDiagnosticsDirectory" />
+                    </StackPanel>
+
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding InputChannelTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding InputChannelText}" FontWeight="{DynamicResource Token.Weight.Bold}" />
+                            <TextBlock Text="{Binding InputChannelDetail}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding FidelityTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <ItemsControl ItemsSource="{Binding FidelityItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Label}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Value}"
+                                                   Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
     </Grid>
 </Window>

@@ -1,0 +1,61 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XBear.App\XBear.App.csproj" />
+  </ItemGroup>
+
+  <!--
+    界面源码与 XAML 复制到输出目录，静态扫描测试需要读取真实文件内容。
+    扫描的是源码目录本身，复制只是为了让测试在任意工作目录下都能定位。
+  -->
+  <!--
+    共享规格位于仓库根的 spec/spec/，术语表校验与令牌读取需要真实契约文件，
+    原样复制到输出目录，运行期以 spec/ 为根定位。
+  -->
+  <ItemGroup>
+    <SpecDir Include="$(MSBuildThisFileDirectory)..\..\spec\spec\**\*" />
+  </ItemGroup>
+
+  <Target Name="CopySpecToOutput" BeforeTargets="Build">
+    <Copy SourceFiles="@(SpecDir)"
+          DestinationFolder="$(OutDir)spec\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <ItemGroup>
+    <None Include="$(OutDir)spec\**\*.json" CopyToOutputDirectory="Never" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\XBear.App\**\*.xaml"
+          Link="ui\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\XBear.App\**\*.cs"
+          Link="ui\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Exclude="..\XBear.App\obj\**\*.cs;..\XBear.App\bin\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(OutDir)ui\**\*" CopyToOutputDirectory="Never" />
+  </ItemGroup>
+
+</Project>
