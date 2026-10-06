@@ -1,12 +1,19 @@
 using System.Text.Json.Serialization;
+using XBear.Core.Serialization;
 
 namespace XBear.Core.Spec;
 
-/// <summary>镜像清单，对应 spec/schema/image.schema.json。</summary>
+/// <summary>镜像清单，字段与 spec/schema/image.schema.json 严格对应。</summary>
 public sealed class ImageSpec
 {
+    [JsonPropertyName("schemaVersion")]
+    public string SchemaVersion { get; set; } = "1.0.0";
+
     [JsonPropertyName("id")]
     public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("displayName")]
+    public string DisplayName { get; set; } = string.Empty;
 
     [JsonPropertyName("androidVersion")]
     public string AndroidVersion { get; set; } = string.Empty;
@@ -17,17 +24,21 @@ public sealed class ImageSpec
     [JsonPropertyName("source")]
     public ImageSource Source { get; set; } = new();
 
-    /// <summary>实测验证结论，只填真实测试结果，untested 不得臆测改为 pass。</summary>
     [JsonPropertyName("verified")]
-    public FidelityVerification Verified { get; set; } = new();
+    public ImageVerification? Verified { get; set; }
 }
 
 /// <summary>镜像来源信息。</summary>
 public sealed class ImageSource
 {
-    [JsonPropertyName("url")]
-    public string Url { get; set; } = string.Empty;
+    /// <summary>来源类型，取值 url / local / builtin。</summary>
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "url";
 
+    [JsonPropertyName("url")]
+    public string? Url { get; set; }
+
+    /// <summary>镜像校验值，64 位小写十六进制。下载后必须回填真实值。</summary>
     [JsonPropertyName("sha256")]
     public string Sha256 { get; set; } = string.Empty;
 
@@ -35,37 +46,62 @@ public sealed class ImageSource
     public long SizeBytes { get; set; }
 }
 
-/// <summary>保真度逐项实测结论，P1~P6。</summary>
-public sealed class FidelityVerification
+/// <summary>镜像实测结论与证据链。</summary>
+public sealed class ImageVerification
 {
-    [JsonPropertyName("P1")]
-    public VerificationState P1 { get; set; } = VerificationState.Untested;
+    /// <summary>实际生效的输入通道，取值 none / native / scrcpy。</summary>
+    [JsonPropertyName("inputChannel")]
+    public string InputChannel { get; set; } = "none";
 
-    [JsonPropertyName("P2")]
-    public VerificationState P2 { get; set; } = VerificationState.Untested;
+    /// <summary>实测时间，ISO 8601 格式。</summary>
+    [JsonPropertyName("verifiedAt")]
+    public string? VerifiedAt { get; set; }
 
-    [JsonPropertyName("P3")]
-    public VerificationState P3 { get; set; } = VerificationState.Untested;
+    [JsonPropertyName("qemuVersion")]
+    public string? QemuVersion { get; set; }
 
-    [JsonPropertyName("P4")]
-    public VerificationState P4 { get; set; } = VerificationState.Untested;
+    /// <summary>可复现的验证命令与关键输出。</summary>
+    [JsonPropertyName("evidence")]
+    public string? Evidence { get; set; }
 
-    [JsonPropertyName("P5")]
-    public VerificationState P5 { get; set; } = VerificationState.Untested;
-
-    [JsonPropertyName("P6")]
-    public VerificationState P6 { get; set; } = VerificationState.Untested;
-
-    /// <summary>每项的实测备注，未实测项为空。</summary>
-    [JsonPropertyName("notes")]
-    public Dictionary<string, string>? Notes { get; set; }
+    /// <summary>保真度逐项实测结论。</summary>
+    [JsonPropertyName("fidelity")]
+    public FidelitySet Fidelity { get; set; } = new();
 }
 
-/// <summary>单项保真度的验证状态。</summary>
-[JsonConverter(typeof(JsonStringEnumConverter))]
+/// <summary>保真度 P1~P6 的逐项实测结论。</summary>
+public sealed class FidelitySet
+{
+    /// <summary>P1 可获取 root。</summary>
+    [JsonPropertyName("P1_root")]
+    public VerificationState P1Root { get; set; } = VerificationState.Untested;
+
+    /// <summary>P2 系统分区可写。</summary>
+    [JsonPropertyName("P2_systemWrite")]
+    public VerificationState P2SystemWrite { get; set; } = VerificationState.Untested;
+
+    /// <summary>P3 可刷模块。</summary>
+    [JsonPropertyName("P3_moduleFlash")]
+    public VerificationState P3ModuleFlash { get; set; } = VerificationState.Untested;
+
+    /// <summary>P4 可刷镜像。</summary>
+    [JsonPropertyName("P4_imageSwap")]
+    public VerificationState P4ImageSwap { get; set; } = VerificationState.Untested;
+
+    /// <summary>P5 root 持久。</summary>
+    [JsonPropertyName("P5_rootPersist")]
+    public VerificationState P5RootPersist { get; set; } = VerificationState.Untested;
+
+    /// <summary>P6 可运行 ARM 应用。</summary>
+    [JsonPropertyName("P6_armApp")]
+    public VerificationState P6ArmApp { get; set; } = VerificationState.Untested;
+}
+
+/// <summary>单项保真度的验证状态。untested 不得臆测改为 pass。</summary>
+[JsonConverter(typeof(LowerCaseEnumConverter<VerificationState>))]
 public enum VerificationState
 {
-    Untested,
-    Pass,
-    Fail
+    Untested = 0,
+    Pass = 1,
+    Fail = 2
 }
