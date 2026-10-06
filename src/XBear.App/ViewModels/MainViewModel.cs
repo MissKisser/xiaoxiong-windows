@@ -182,7 +182,7 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 启动选中实例。
+    /// 启动选中实例。启动成功后立即探测该实例的输入通道，使界面反映真实生效的通路。
     /// </summary>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>异步任务。</returns>
@@ -194,7 +194,32 @@ public sealed partial class MainViewModel : ObservableObject
             return;
         }
 
-        await RunGuardedAsync(() => _manager.StartAsync(Selected.Id, cancellationToken)).ConfigureAwait(true);
+        string instanceId = Selected.Id;
+        await RunGuardedAsync(() => _manager.StartAsync(instanceId, cancellationToken)).ConfigureAwait(true);
+
+        // 只有真正进入运行态才探测；启动失败时保留原有结论并由错误横幅说明原因。
+        if (_manager.GetState(instanceId) is not InstanceState.Running)
+        {
+            return;
+        }
+
+        await ProbeInputChannelAsync(instanceId, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// 重新探测选中实例的输入通道。
+    /// </summary>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>异步任务。</returns>
+    [RelayCommand]
+    public async Task ProbeSelectedInputChannelAsync(CancellationToken cancellationToken = default)
+    {
+        if (_manager is null || Selected is null)
+        {
+            return;
+        }
+
+        await ProbeInputChannelAsync(Selected.Id, cancellationToken).ConfigureAwait(true);
     }
 
     /// <summary>
@@ -277,6 +302,40 @@ public sealed partial class MainViewModel : ObservableObject
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// 探测指定实例的输入通道并把结论刷到界面。探测失败不抛出未处理异常：
+    /// 结论已包含各通路失败原因，直接呈现给用户；仅调用方主动取消才原样上抛。
+    /// </summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>异步任务。</returns>
+    private async Task ProbeInputChannelAsync(string instanceId, CancellationToken cancellationToken)
+    {
+        if (_manager is null)
+        {
+            return;
+        }
+
+        try
+        {
+            InputProbeResult result =
+                await _manager.ProbeInputChannelAsync(instanceId, cancellationToken).ConfigureAwait(true);
+
+            // 探测期间用户可能已切换选中项，结论只回填给发起探测的那个实例。
+            if (Selected is not null && string.Equals(Selected.Id, instanceId, StringComparison.Ordinal))
+            {
+                UpdateInputChannel(result);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // 取消不是失败，保留此前的结论。
+        }
+        catch (Exception ex) when (Present(ex))
+        {
         }
     }
 

@@ -1,6 +1,10 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
 using XBear.Core.Abstractions;
+using XBear.Core.Adb;
 using XBear.Core.Diagnostics;
+using XBear.Core.Input;
+using XBear.Core.Qmp;
 
 namespace XBear.Core.Instances;
 
@@ -45,10 +49,14 @@ public sealed class InstanceManager
     private readonly IQcow2Manager _qcow2Manager;
     private readonly string _imagesRoot;
     private readonly string _instancesRoot;
+    private readonly Spec.SpecValidator? _specValidator;
+    private readonly Func<IQmpClient> _qmpClientFactory;
+    private readonly Func<IAdbClient> _adbClientFactory;
 
     private readonly ConcurrentDictionary<string, InstanceState> _states = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AllocatedPorts> _allocatedPorts = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, QemuProcessHandle> _handles = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, ProbingInputChannel> _inputChannels = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
@@ -61,6 +69,15 @@ public sealed class InstanceManager
     /// <param name="qcow2Manager">overlay 链管理。</param>
     /// <param name="imagesRoot">只读 base 镜像根目录。</param>
     /// <param name="instancesRoot">每实例可写 overlay 根目录。</param>
+    /// <param name="specValidator">
+    /// 实例配置的 Schema 校验器，为 null 时跳过启动前校验。
+    /// </param>
+    /// <param name="qmpClientFactory">
+    /// QMP 客户端工厂，缺省时按实例端口新建客户端。
+    /// </param>
+    /// <param name="adbClientFactory">
+    /// adb 客户端工厂，缺省时按实例端口新建客户端。
+    /// </param>
     public InstanceManager(
         IInstanceRepository repository,
         IPortAllocator portAllocator,
@@ -68,7 +85,10 @@ public sealed class InstanceManager
         IQemuLauncher launcher,
         IQcow2Manager qcow2Manager,
         string imagesRoot,
-        string instancesRoot)
+        string instancesRoot,
+        Spec.SpecValidator? specValidator = null,
+        Func<IQmpClient>? qmpClientFactory = null,
+        Func<IAdbClient>? adbClientFactory = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(portAllocator);
@@ -85,6 +105,9 @@ public sealed class InstanceManager
         _qcow2Manager = qcow2Manager;
         _imagesRoot = imagesRoot;
         _instancesRoot = instancesRoot;
+        _specValidator = specValidator;
+        _qmpClientFactory = qmpClientFactory ?? (static () => new QmpClient());
+        _adbClientFactory = adbClientFactory ?? (static () => new AdbClient());
     }
 
     /// <summary>状态变更通知，供界面绑定。</summary>
@@ -155,6 +178,81 @@ public sealed class InstanceManager
         }
     }
 
+    /// <summary>
+    /// 探测实例当前可用的输入通路。实例未运行时不发起连接，直接返回尚未探测的结论；
+    /// 已运行时按该实例已分配的 QMP 与 adb 宿主端口建立探测式通道，并返回如实结论。
+    /// 探测所需的 QMP 与 adb 客户端由本方法按实例端口创建，随通道一并释放，不跨实例复用。
+    /// </summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>输入通路探测结论，含各通路失败原因。</returns>
+    public async Task<InputProbeResult> ProbeInputChannelAsync(
+        string instanceId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
+
+        // 未进入运行态就没有可连的端口，如实报告尚未探测，不伪造通路可用。
+        if (GetState(instanceId) is not InstanceState.Running)
+        {
+            return new InputProbeResult(InputChannelKind.Unknown);
+        }
+
+        if (!_allocatedPorts.TryGetValue(instanceId, out AllocatedPorts? ports))
+        {
+            return new InputProbeResult(
+                InputChannelKind.Unavailable,
+                "实例已处于运行态，但未查到已分配的宿主端口。",
+                "请停止后重新启动实例，使端口重新分配后再探测。");
+        }
+
+        ProbingInputChannel channel = GetOrCreateInputChannel(instanceId, ports);
+
+        try
+        {
+            return await channel.ProbeAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // 调用方主动取消按取消原样上抛，不谎报为通路不可用。
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // 探测过程本身已把各通路失败原因并入结论，此处只兜住通道层面的意外异常。
+            return new InputProbeResult(
+                InputChannelKind.Unavailable,
+                "输入通道探测未能完成。",
+                ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// 取该实例的探测式输入通道，首次调用时按已分配端口创建并缓存，
+    /// 使同一实例的跨次探测能累计原生通路的连续失败次数。
+    /// </summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <param name="ports">该实例已分配的宿主端口组。</param>
+    /// <returns>该实例专属的探测式输入通道。</returns>
+    private ProbingInputChannel GetOrCreateInputChannel(string instanceId, AllocatedPorts ports)
+    {
+        if (_inputChannels.TryGetValue(instanceId, out ProbingInputChannel? existing))
+        {
+            return existing;
+        }
+
+        var channel = new ProbingInputChannel(
+            _qmpClientFactory(),
+            _adbClientFactory(),
+            new InputChannelOptions
+            {
+                QmpPort = ports.Qmp,
+                AdbPort = ports.Adb,
+            });
+
+        return _inputChannels.GetOrAdd(instanceId, channel);
+    }
+
     private async Task StartCoreAsync(string instanceId, CancellationToken cancellationToken)
     {
         // Faulted 表示上一次启动失败但资源已回收，允许直接重试；其余非停止态一律拒绝。
@@ -196,6 +294,7 @@ public sealed class InstanceManager
                 await SafeDisposeAsync(handle).ConfigureAwait(false);
             }
 
+            await ReleaseInputChannelAsync(instanceId).ConfigureAwait(false);
             ReleasePorts(instanceId);
 
             SetState(instanceId, InstanceState.Stopped);
@@ -209,6 +308,7 @@ public sealed class InstanceManager
                 await SafeDisposeAsync(handle).ConfigureAwait(false);
             }
 
+            await ReleaseInputChannelAsync(instanceId).ConfigureAwait(false);
             ReleasePorts(instanceId);
 
             SetState(instanceId, InstanceState.Faulted);
@@ -256,6 +356,8 @@ public sealed class InstanceManager
         finally
         {
             // 无论进程是否成功终止，端口都必须归还，否则重试启动会一直撞端口占用。
+            // 输入通道持有指向这些端口的连接，同样在此一并释放。
+            await ReleaseInputChannelAsync(instanceId).ConfigureAwait(false);
             ReleasePorts(instanceId);
         }
 
@@ -287,7 +389,27 @@ public sealed class InstanceManager
                 "请在实例配置中填写镜像引用，并确认该镜像已导入。");
         }
 
+        ValidateAgainstSchema(instanceId, spec);
+
         return spec;
+    }
+
+    /// <summary>
+    /// 启动前用共享契约校验实例配置。把已解析的配置重新序列化后送 Schema 校验，
+    /// 能抓到枚举取值越界与字段丢失。未装配校验器时跳过，保持既有调用点行为不变。
+    /// </summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <param name="spec">待校验的实例配置。</param>
+    /// <exception cref="XBearException">配置不符合共享契约时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    private void ValidateAgainstSchema(string instanceId, Spec.InstanceSpec spec)
+    {
+        if (_specValidator is null)
+        {
+            return;
+        }
+
+        string json = JsonSerializer.Serialize(spec, Spec.SpecLoader.SerializerOptions);
+        _specValidator.ValidateInstance(json).EnsureValid();
     }
 
     private string ResolveBaseImagePath(string imageRef) =>
@@ -339,6 +461,29 @@ public sealed class InstanceManager
         if (_allocatedPorts.TryRemove(instanceId, out _))
         {
             _portAllocator.Release(instanceId);
+        }
+    }
+
+    /// <summary>
+    /// 释放该实例的探测式输入通道。通道持有按实例端口建立的 QMP 与 adb 连接，
+    /// 必须随端口一并释放，否则会留下指向已回收端口的悬挂连接。
+    /// </summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <returns>异步任务。</returns>
+    private async Task ReleaseInputChannelAsync(string instanceId)
+    {
+        if (!_inputChannels.TryRemove(instanceId, out ProbingInputChannel? channel))
+        {
+            return;
+        }
+
+        try
+        {
+            await channel.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 释放连接失败不应影响端口回收与状态推进，实例已经停下来了。
         }
     }
 

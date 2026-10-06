@@ -1,6 +1,7 @@
 using System.IO;
 using XBear.App.Presentation;
 using XBear.App.Services;
+using XBear.App.Spec;
 using XBear.App.ViewModels;
 using XBear.Core.Abstractions;
 using XBear.Core.Diagnostics;
@@ -48,6 +49,9 @@ public static class AppComposition
         IQemuLauncher launcher = new QemuLauncher(paths, argBuilder, logRoot);
         IQcow2Manager qcow2 = new Qcow2Manager(paths);
 
+        // 校验器在此装配：Core 不引用 Schema 库，求值实现由引用了 JsonSchema.Net 的本层注入。
+        var validator = new SpecValidator(SchemaEvaluatorFactory.Create(), loader);
+
         var manager = new InstanceManager(
             repository,
             portAllocator,
@@ -55,49 +59,84 @@ public static class AppComposition
             launcher,
             qcow2,
             imagesRoot,
-            instancesRoot);
+            instancesRoot,
+            validator);
 
         var diagnostics = new DiagnosticsExporter(loader);
         var audit = new AuditLog(Path.Combine(logRoot, "audit.log"));
         var terms = new TerminologyCatalog(loader.LoadTerminology());
 
-        IReadOnlyDictionary<string, ImageSpec> images = LoadImages(loader, imagesRoot);
+        ImageLoadOutcome outcome = LoadImages(loader, validator, imagesRoot);
 
         return new AppServices(
             repository,
             manager,
-            images,
+            outcome.Images,
             diagnostics,
             audit,
             terms,
-            loader.LoadDesignTokens());
+            loader.LoadDesignTokens(),
+            validator,
+            outcome.RejectedManifests);
     }
 
     /// <summary>
     /// 扫描镜像清单目录，按标识索引镜像。目录缺失时返回空集合，不阻断界面启动。
+    /// 每份清单先过共享契约校验，未通过的清单不进入镜像集合，其原因被记录下来供界面如实告知。
     /// </summary>
-    private static IReadOnlyDictionary<string, ImageSpec> LoadImages(SpecLoader loader, string imagesRoot)
+    /// <param name="loader">规格读取器。</param>
+    /// <param name="validator">实例配置与镜像清单的 Schema 校验器。</param>
+    /// <param name="imagesRoot">只读 base 镜像根目录。</param>
+    /// <returns>通过校验的镜像集合与被拒绝清单的原因。</returns>
+    private static ImageLoadOutcome LoadImages(
+        SpecLoader loader,
+        SpecValidator validator,
+        string imagesRoot)
     {
         var images = new Dictionary<string, ImageSpec>(StringComparer.Ordinal);
+        var rejected = new List<ManifestRejection>();
 
         // image.schema.json 描述的是单个镜像，没有目录级清单；
         // 因此界面按 manifests/ 目录扫描 *.json 作为镜像清单来源。
         string manifestDirectory = Path.Combine(imagesRoot, ManifestDirectoryName);
         if (!Directory.Exists(manifestDirectory))
         {
-            return images;
+            return new ImageLoadOutcome(images, rejected);
         }
 
         foreach (string manifestPath in Directory.EnumerateFiles(manifestDirectory, "*.json"))
         {
+            string manifestName = Path.GetFileName(manifestPath);
+
+            string json;
+            try
+            {
+                json = loader.ReadText(manifestPath);
+            }
+            catch (XBearException ex)
+            {
+                // 单个清单损坏不应让整个界面起不来，跳过并记录原因。
+                rejected.Add(new ManifestRejection(manifestName, ex.Message));
+                continue;
+            }
+
+            // 契约校验先行：不合规的镜像清单不得进入界面，避免下游按缺省值静默放行。
+            ValidationResult validation = validator.ValidateImage(json);
+            if (!validation.IsValid)
+            {
+                rejected.Add(new ManifestRejection(manifestName, validation.DescribeErrors()));
+                continue;
+            }
+
             ImageSpec spec;
             try
             {
-                spec = loader.LoadImageFile(manifestPath);
+                spec = loader.ParseImage(json);
             }
-            catch (XBearException)
+            catch (XBearException ex)
             {
-                // 单个清单损坏不应让整个界面起不来，跳过即可。
+                // 通过 Schema 但仍解析失败的清单同样不得进入镜像集合。
+                rejected.Add(new ManifestRejection(manifestName, ex.Message));
                 continue;
             }
 
@@ -105,11 +144,27 @@ public static class AppComposition
             {
                 images[spec.Id] = spec;
             }
+            else
+            {
+                rejected.Add(new ManifestRejection(manifestName, "镜像清单缺少标识，无法在界面中索引。"));
+            }
         }
 
-        return images;
+        return new ImageLoadOutcome(images, rejected);
     }
 }
+
+/// <summary>镜像清单的加载结果，含通过校验的镜像与被拒绝清单的原因。</summary>
+/// <param name="Images">通过校验的镜像清单，按标识索引。</param>
+/// <param name="RejectedManifests">被拒绝的镜像清单及原因，无拒绝项时为空集合。</param>
+internal sealed record ImageLoadOutcome(
+    IReadOnlyDictionary<string, ImageSpec> Images,
+    IReadOnlyList<ManifestRejection> RejectedManifests);
+
+/// <summary>单份镜像清单被拒绝的原因。</summary>
+/// <param name="ManifestName">镜像清单文件名。</param>
+/// <param name="Reason">被拒绝的原因描述。</param>
+public sealed record ManifestRejection(string ManifestName, string Reason);
 
 /// <summary>组合根产出的界面依赖集合。</summary>
 /// <param name="Repository">实例配置仓库。</param>
@@ -119,6 +174,8 @@ public static class AppComposition
 /// <param name="Audit">审计日志。</param>
 /// <param name="Terms">界面文案术语来源。</param>
 /// <param name="Tokens">共享设计令牌。</param>
+/// <param name="Validator">实例配置与镜像清单的 Schema 校验器。</param>
+/// <param name="RejectedManifests">被拒绝的镜像清单及原因，无拒绝项时为空集合。</param>
 public sealed record AppServices(
     IInstanceRepository Repository,
     InstanceManager Manager,
@@ -126,4 +183,6 @@ public sealed record AppServices(
     DiagnosticsExporter Diagnostics,
     AuditLog Audit,
     TerminologyCatalog Terms,
-    DesignTokens Tokens);
+    DesignTokens Tokens,
+    SpecValidator Validator,
+    IReadOnlyList<ManifestRejection> RejectedManifests);
