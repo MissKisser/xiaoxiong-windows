@@ -6,6 +6,12 @@
 
   <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <!--
+      JSON Schema 求值器随 App 层引入，而非 Core 层。
+      Core 刻意不引用任何 Schema 库，ISchemaEvaluator 的实现由引用了 Schema 库的装配层注入。
+      版本与测试工程保持一致，确保两端对同一份契约的判定口径相同。
+    -->
+    <PackageReference Include="JsonSchema.Net" Version="7.3.3" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -15,5 +21,25 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
   </PropertyGroup>
+
+  <!--
+    共享规格以 submodule 形式位于 ../../spec/，其下真实内容为 spec/。
+    SpecLoader.Default 以 AppContext.BaseDirectory/spec 为契约根，
+    设计令牌、术语表与三份 Schema 均从该位置读取，缺一即启动失败，
+    因此契约必须随程序一并落到输出目录。
+  -->
+  <ItemGroup>
+    <SpecDir Include="$(MSBuildThisFileDirectory)..\..\spec\spec\**\*" />
+  </ItemGroup>
+
+  <Target Name="CopySpecToOutput" BeforeTargets="Build">
+    <Copy SourceFiles="@(SpecDir)"
+          DestinationFolder="$(OutDir)spec\%(RecursiveDir)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <ItemGroup>
+    <None Include="$(OutDir)spec\**\*.json" CopyToOutputDirectory="Never" />
+  </ItemGroup>
 
 </Project>
