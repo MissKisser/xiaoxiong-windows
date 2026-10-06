@@ -3,6 +3,11 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:XBear.App.Presentation"
              StartupUri="MainWindow.xaml">
+    <!--
+        StartupUri 在这里保留而不在 OnStartup 里重复建窗：OnStartup 负责注入
+        DataContext 并在令牌写入后重建主窗口，而 StartupUri 承担 WPF 的初始建窗职责。
+        两者职责不同，缺一则主窗口要么没有 DataContext，要么根本不出现。
+    -->
     <Application.Resources>
         <ResourceDictionary>
             <local:BoolToVisibilityConverter x:Key="BoolToVisibility" />
@@ -69,7 +74,7 @@
                 <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Raised}" />
                 <Setter Property="Padding" Value="{DynamicResource Token.Thickness.Md}" />
                 <Setter Property="Margin" Value="{DynamicResource Token.Thickness.Md}" />
-                <Setter Property="CornerRadius" Value="{DynamicResource Token.Radius.Md}" />
+                <Setter Property="CornerRadius" Value="{DynamicResource Token.Corner.Md}" />
             </Style>
         </ResourceDictionary>
     </Application.Resources>

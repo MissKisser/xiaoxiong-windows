@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.IO;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using XBear.Core.Spec;
 
@@ -223,5 +225,62 @@ public class TokenKeyReferentialIntegrityTests
             absent.Count == 0,
             "间距令牌必须提供 Thickness 形态供 Margin 与 Padding 消费：" + Environment.NewLine +
             string.Join(Environment.NewLine, absent));
+    }
+}
+
+/// <summary>
+/// 规则三自证：WPF 界面层不得在 invariant 全球化模式下构建。
+///
+/// invariant 模式下进程内所有区域设置均为空，WPF 数据绑定在解析语言时
+/// 会抛出「找不到对应的非中性文化」而中断，程序在启动阶段直接失败。
+/// 该缺陷对所有单元测试不可见，因此必须在构建配置层面守住。
+/// </summary>
+public class GlobalizedUiTests
+{
+    /// <summary>
+    /// 取界面层程序集自身的运行时配置文件路径。
+    /// 测试进程本身的入口是测试宿主，检查它没有意义，必须检查被测程序集。
+    /// </summary>
+    private static string RuntimeConfigPath
+    {
+        get
+        {
+            string assemblyPath = typeof(XBear.App.App).Assembly.Location;
+            string configPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+
+            if (!File.Exists(configPath))
+            {
+                throw new InvalidOperationException($"找不到运行时配置文件，测试结论不成立：{configPath}");
+            }
+
+            return configPath;
+        }
+    }
+
+    [Fact]
+    public void UiAssemblyIsNotBuiltWithInvariantGlobalization()
+    {
+        string path = RuntimeConfigPath;
+        string config = File.ReadAllText(path);
+
+        // 只在显式声明为 true 时才算启用；键缺失即默认关闭。
+        Assert.False(
+            config.Contains("\"System.Globalization.Invariant\": true", StringComparison.Ordinal),
+            "WPF 界面层不得以 invariant 全球化模式构建，否则数据绑定会因无法解析区域设置而中断：" +
+            Environment.NewLine + path);
+    }
+
+    [Fact]
+    public void RuntimeExposesAtLeastOneConcreteCulture()
+    {
+        // invariant 模式下不会有任何具体文化，绑定引擎必然失败。
+        var concrete = CultureInfo.GetCultures(CultureTypes.AllCultures)
+            .Where(c => !c.IsNeutralCulture)
+            .ToList();
+
+        Assert.NotEmpty(concrete);
+        Assert.False(
+            CultureInfo.CurrentUICulture.IsNeutralCulture,
+            "当前 UI 文化不应是中性的，否则 WPF 绑定无法解析。");
     }
 }

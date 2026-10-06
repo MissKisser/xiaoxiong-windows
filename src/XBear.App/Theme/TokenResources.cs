@@ -55,6 +55,13 @@ public static class TokenResources
         Put(resources, "Thickness.Xl", ThicknessOf(tokens.Spacing("xl")));
         Put(resources, "Thickness.Xxl", ThicknessOf(tokens.Spacing("xxl")));
 
+        // 同理，Border.CornerRadius 的类型是 CornerRadius 而不是 double，
+        // 圆角令牌也另存一份 CornerRadius 形态供样式消费。
+        Put(resources, "Corner.Sm", CornerOf(tokens.Radius("sm")));
+        Put(resources, "Corner.Md", CornerOf(tokens.Radius("md")));
+        Put(resources, "Corner.Lg", CornerOf(tokens.Radius("lg")));
+        Put(resources, "Corner.Full", CornerOf(tokens.Radius("full")));
+
         Put(resources, "Font.Caption", (double)tokens.FontSize("caption"));
         Put(resources, "Font.Body", (double)tokens.FontSize("body"));
         Put(resources, "Font.Subtitle", (double)tokens.FontSize("subtitle"));
@@ -114,6 +121,14 @@ public static class TokenResources
     /// <returns>四边相同的 <see cref="Thickness"/>。</returns>
     private static Thickness ThicknessOf(double spacing) =>
         new(spacing);
+
+    /// <summary>
+    /// 把单个圆角数值转换为四角等值的 <see cref="CornerRadius"/>。
+    /// </summary>
+    /// <param name="radius">令牌中的圆角数值。</param>
+    /// <returns>四角相同的 <see cref="CornerRadius"/>。</returns>
+    private static CornerRadius CornerOf(double radius) =>
+        new(radius);
 
     /// <summary>
     /// 按数值取字重。令牌里的 400、500、700 对应 WPF 的标准字重档位。

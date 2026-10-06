@@ -20,6 +20,12 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!--
+      WPF 的数据绑定在运行时解析区域设置，invariant 模式下所有文化均为空，
+      绑定引擎会抛出「找不到对应的非中性文化」并中断，启动阶段即失败。
+      因此界面层必须使用真实的全球化数据。
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <!--
