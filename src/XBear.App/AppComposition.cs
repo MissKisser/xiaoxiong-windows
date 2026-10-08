@@ -20,6 +20,12 @@ public static class AppComposition
     /// <summary>镜像清单目录名，位于镜像根目录之下。</summary>
     public const string ManifestDirectoryName = "manifests";
 
+    /// <summary>实例配置目录名，位于数据根目录之下。</summary>
+    public const string InstancesDirectoryName = "instances";
+
+    /// <summary>标识墓碑文件名，位于数据根目录之下。</summary>
+    public const string TombstoneFileName = "tombstones.json";
+
     /// <summary>
     /// 构造界面所需的全部服务。
     /// </summary>
@@ -35,13 +41,17 @@ public static class AppComposition
 
         Directory.CreateDirectory(dataRoot);
 
-        string instancesRoot = Path.Combine(dataRoot, "instances");
+        string instancesRoot = Path.Combine(dataRoot, InstancesDirectoryName);
         string logRoot = Path.Combine(dataRoot, "logs");
         Directory.CreateDirectory(instancesRoot);
         Directory.CreateDirectory(logRoot);
 
-        var tombstones = new TombstoneStore(Path.Combine(dataRoot, "tombstones.json"));
+        var tombstones = new TombstoneStore(Path.Combine(dataRoot, TombstoneFileName));
         IInstanceRepository repository = new FileInstanceRepository(instancesRoot, tombstones);
+
+        // 标识工厂与实例仓库共用同一份墓碑：删除过的实例标识必须被后续实例避开，
+        // 两者若各持一份墓碑，防复用就会被绕过。
+        var identityFactory = new DeviceIdentityFactory(repository, tombstones);
 
         IPortAllocator portAllocator = new PortAllocator();
         var argBuilder = new QemuArgBuilder();
@@ -77,6 +87,7 @@ public static class AppComposition
             terms,
             loader.LoadDesignTokens(),
             validator,
+            identityFactory,
             outcome.RejectedManifests);
     }
 
@@ -175,6 +186,7 @@ public sealed record ManifestRejection(string ManifestName, string Reason);
 /// <param name="Terms">界面文案术语来源。</param>
 /// <param name="Tokens">共享设计令牌。</param>
 /// <param name="Validator">实例配置与镜像清单的 Schema 校验器。</param>
+/// <param name="IdentityFactory">实例设备标识工厂，为每个实例发放独立且不复用的标识。</param>
 /// <param name="RejectedManifests">被拒绝的镜像清单及原因，无拒绝项时为空集合。</param>
 public sealed record AppServices(
     IInstanceRepository Repository,
@@ -185,4 +197,5 @@ public sealed record AppServices(
     TerminologyCatalog Terms,
     DesignTokens Tokens,
     SpecValidator Validator,
+    IDeviceIdentityFactory IdentityFactory,
     IReadOnlyList<ManifestRejection> RejectedManifests);

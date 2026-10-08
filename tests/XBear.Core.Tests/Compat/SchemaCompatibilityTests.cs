@@ -18,7 +18,9 @@ public class SchemaCompatibilityTests
                  {
                      SpecLoader.WindowsInstanceFixtureName,
                      SpecLoader.AndroidInstanceFixtureName,
-                     SpecLoader.ImageFixtureName
+                     SpecLoader.ImageFixtureName,
+                     SpecLoader.SnapshotMinimalFixtureName,
+                     SpecLoader.SnapshotFullFixtureName
                  })
         {
             var result = SpecTestHost.Validator.ValidateFixture(fixture);
@@ -144,6 +146,96 @@ public class SchemaCompatibilityTests
         var result = SpecTestHost.Validator.ValidateInstance(SpecTestHost.WindowsInstanceJson());
 
         Assert.Same(result, result.EnsureValid());
+    }
+
+    /// <summary>两份快照样例文件名。</summary>
+    public static TheoryData<string> SnapshotFixtureFiles =>
+        new()
+        {
+            { SpecLoader.SnapshotMinimalFixtureName },
+            { SpecLoader.SnapshotFullFixtureName }
+        };
+
+    [Theory]
+    [MemberData(nameof(SnapshotFixtureFiles))]
+    public void SnapshotFixturePassesSnapshotSchema(string fixtureFileName)
+    {
+        var result = SpecTestHost.Validator.ValidateSnapshot(
+            SpecTestHost.Loader.ReadFixtureText(fixtureFileName));
+
+        Assert.True(result.IsValid, result.DescribeErrors());
+    }
+
+    [Fact]
+    public void UnknownSnapshotFieldIsRejected()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.SnapshotMinimalJson())!.AsObject();
+        sample["restorable"] = true;
+
+        var result = SpecTestHost.Validator.ValidateSnapshot(sample.ToJsonString());
+
+        Assert.False(result.IsValid, "快照契约顶层封闭，未知字段必须被拒绝");
+        Assert.Contains(result.Errors, e => e.Path == "/restorable");
+    }
+
+    [Theory]
+    [InlineData("creating")]
+    [InlineData("ready")]
+    [InlineData("failed")]
+    public void SchemaAcceptsEveryDeclaredSnapshotState(string state)
+    {
+        var sample = JsonNode.Parse(SpecTestHost.SnapshotMinimalJson())!.AsObject();
+        sample["state"] = state;
+
+        var result = SpecTestHost.Validator.ValidateSnapshot(sample.ToJsonString());
+
+        Assert.True(result.IsValid, result.DescribeErrors());
+    }
+
+    [Fact]
+    public void UndeclaredSnapshotStateIsRejected()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.SnapshotMinimalJson())!.AsObject();
+        sample["state"] = "restoring";
+
+        var result = SpecTestHost.Validator.ValidateSnapshot(sample.ToJsonString());
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Path == "/state");
+    }
+
+    [Fact]
+    public void SnapshotCreatedAtWithoutZoneOffsetIsRejected()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.SnapshotMinimalJson())!.AsObject();
+        sample["createdAt"] = "2026-10-07T11:20:00";
+
+        var result = SpecTestHost.Validator.ValidateSnapshot(sample.ToJsonString());
+
+        Assert.False(result.IsValid, "创建时刻必须带时区偏移");
+        Assert.Contains(result.Errors, e => e.Path == "/createdAt");
+    }
+
+    [Fact]
+    public void SnapshotInstanceRefMustFallInSharedIdDomain()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.SnapshotMinimalJson())!.AsObject();
+        sample["instanceRef"] = "Win_Main_01";
+
+        var result = SpecTestHost.Validator.ValidateSnapshot(sample.ToJsonString());
+
+        Assert.False(result.IsValid, "实例标识的取值域两端共用，大写下划线不在域内");
+        Assert.Contains(result.Errors, e => e.Path == "/instanceRef");
+    }
+
+    [Fact]
+    public void BothSnapshotSamplesShareTheSameSchemaVersion()
+    {
+        var minimal = SpecTestHost.Loader.ParseSnapshot(SpecTestHost.SnapshotMinimalJson());
+        var full = SpecTestHost.Loader.ParseSnapshot(SpecTestHost.SnapshotFullJson());
+
+        Assert.Equal(minimal.SchemaVersion, full.SchemaVersion);
+        Assert.Equal(minimal.InstanceRef, full.InstanceRef);
     }
 }
 

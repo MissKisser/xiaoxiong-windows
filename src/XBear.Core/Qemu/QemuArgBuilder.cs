@@ -31,8 +31,15 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
     /// <summary>VNC 显示号的基准端口，显示号为 N 时实际监听该基准加 N。</summary>
     public const int VncDisplayBasePort = 5900;
 
+    /// <summary>实例未声明 CPU 型号时使用的缺省型号，直接透传宿主 CPU 能力。</summary>
+    public const string DefaultCpuModel = "host";
+
     private const string NetworkDeviceId = "net0";
     private const string QemuUserNetPrefix = "user";
+
+    /// <summary>CPU 型号允许的字符集，避免取值被拆成额外的 QEMU 参数。</summary>
+    private static readonly Regex CpuModelPattern =
+        new(@"^[A-Za-z0-9._+,\-=]+$", RegexOptions.CultureInvariant);
 
     private static readonly Regex FixedAddressPattern =
         new(@"^10\.0\.2\.[0-9]{1,3}$", RegexOptions.CultureInvariant);
@@ -53,6 +60,23 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
     /// <exception cref="XBearException">配置不满足契约时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
     public IReadOnlyList<string> BuildStartArguments(
         InstanceSpec spec,
+        string diskPath,
+        AllocatedPorts ports)
+        => BuildStartArguments(spec, image: null, diskPath, ports);
+
+    /// <summary>
+    /// 生成实例启动参数序列，不含可执行文件路径。
+    /// 镜像清单决定保真度相关的引导参数，为空时按镜像未知处理，只下发实例自身的引导参数。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <param name="image">实例引用的镜像清单，可为空，空值不下发镜像保真度相关引导参数。</param>
+    /// <param name="diskPath">实例可写磁盘镜像路径。</param>
+    /// <param name="ports">本次分配到的宿主端口。</param>
+    /// <returns>可直接拼接为命令行的参数序列。</returns>
+    /// <exception cref="XBearException">配置不满足契约时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    public IReadOnlyList<string> BuildStartArguments(
+        InstanceSpec spec,
+        ImageSpec? image,
         string diskPath,
         AllocatedPorts ports)
     {
@@ -86,7 +110,7 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
             "-accel",
             "whpx",
             "-cpu",
-            "host",
+            ResolveCpuModel(spec),
             "-smp",
             spec.Resources.CpuCores.ToString(CultureInfo.InvariantCulture),
             "-m",
@@ -104,6 +128,17 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
             BuildVncDisplay(spec.Network?.Exposure, ports.Vnc),
         };
 
+        // 引导命令行没有可下发的内容时整条省略，保持既有启动参数与不携带标识的旧实例完全一致。
+        var kernelCommandLine = KernelCommandLine.Build(
+            spec.DeviceIdentity,
+            image?.Verified?.Fidelity.P2SystemWrite ?? VerificationState.Untested);
+
+        if (kernelCommandLine.Length > 0)
+        {
+            arguments.Add("-append");
+            arguments.Add(kernelCommandLine);
+        }
+
         arguments.Add("-netdev");
         arguments.Add(BuildNetDev(spec.Network, ports.Adb));
 
@@ -117,6 +152,32 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         }
 
         return arguments;
+    }
+
+    /// <summary>
+    /// 解析 -cpu 取值。实例显式声明时按声明下发，
+    /// 缺省或空白时回退到宿主 CPU 直通，未实测的实例不得因缺省而丢失镜像要求的指令集。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>-cpu 参数值。</returns>
+    /// <exception cref="XBearException">声明的型号含非法字符时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    private static string ResolveCpuModel(InstanceSpec spec)
+    {
+        var cpuModel = spec.Resources.CpuModel?.Trim();
+        if (string.IsNullOrEmpty(cpuModel))
+        {
+            return DefaultCpuModel;
+        }
+
+        if (!CpuModelPattern.IsMatch(cpuModel))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"实例 {spec.Id} 的 cpuModel {cpuModel} 含非法字符。",
+                "cpuModel 只允许字母、数字与 QEMU CPU 型号用的 ._+-,= 组合字符，请修正后重试。");
+        }
+
+        return cpuModel;
     }
 
     /// <summary>组装用户态 NAT 网络设备串，除用户配置的映射外固定附带 adb 转发。</summary>

@@ -5,18 +5,62 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- 顶部全局状态条：adb 端口实际监听 0.0.0.0 时持续显示风险，直到配置改回 loopback。 -->
-        <Border Grid.Row="0" Style="{StaticResource RiskBanner}" Visibility="{Binding HasRisk, Converter={StaticResource BoolToVisibility}}">
-            <TextBlock Text="{Binding RiskBannerText}"
-                       Foreground="{DynamicResource Token.Color.Text.Inverse}"
-                       FontSize="{DynamicResource Token.Font.Body}"
-                       TextWrapping="Wrap" />
+        <!--
+            品牌标题区。窄界面只放纯图形标识与文字，不压横版：
+            横版在 96 px 宽时副标题只剩约 5 px 高，不可读。
+        -->
+        <Border Grid.Row="0" Background="{DynamicResource Token.Color.Surface.Raised}"
+                BorderBrush="{DynamicResource Token.Color.Surface.Overlay}"
+                BorderThickness="0,0,0,1"
+                Padding="{DynamicResource Token.Space.Md}">
+            <DockPanel LastChildFill="False">
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Left">
+                    <Image Source="{StaticResource Brand.Mark}"
+                           Width="{DynamicResource Brand.Mark.Size.Md}"
+                           Height="{DynamicResource Brand.Mark.Size.Md}"
+                           VerticalAlignment="Center" />
+                    <StackPanel Margin="{DynamicResource Space.Margin.HeaderStack}" VerticalAlignment="Center">
+                        <TextBlock Text="小熊模拟器"
+                                   FontSize="{DynamicResource Token.Font.Title}"
+                                   FontWeight="{DynamicResource Token.Weight.Bold}"
+                                   Foreground="{DynamicResource Palette.bear-brown}"
+                                   Margin="0" />
+                        <TextBlock Text="Xiaoxiong Emulator"
+                                   FontSize="{DynamicResource Token.Font.Caption}"
+                                   Foreground="{DynamicResource Token.Color.Text.Secondary}"
+                                   Margin="0" />
+                    </StackPanel>
+                </StackPanel>
+                <Button DockPanel.Dock="Right"
+                        Style="{StaticResource SecondaryButton}"
+                        VerticalAlignment="Center"
+                        Command="{Binding OpenAboutCommand}">
+                    <TextBlock Text="关于" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                </Button>
+            </DockPanel>
         </Border>
 
-        <Grid Grid.Row="1">
+        <!-- 顶部全局状态条：adb 端口实际监听对外地址时持续显示风险，直到配置改回 loopback。 -->
+        <Border Grid.Row="1" Style="{StaticResource RiskBannerFadeIn}"
+                Visibility="{Binding HasRisk, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel Orientation="Horizontal">
+                <Image Source="{StaticResource Icon.Exposure}"
+                       Style="{StaticResource SectionHeaderIcon}"
+                       VerticalAlignment="Center" />
+                <TextBlock Text="{Binding RiskBannerText}"
+                           Foreground="{DynamicResource Token.Color.Text.Inverse}"
+                           FontSize="{DynamicResource Token.Font.Body}"
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"
+                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="2">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="380" />
                 <ColumnDefinition Width="*" />
@@ -24,29 +68,90 @@
 
             <!-- 左侧：实例列表 -->
             <DockPanel Grid.Column="0" Margin="{DynamicResource Token.Space.Md}">
-                <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionTitle}" Text="{Binding InstanceTerm}" />
+                <StackPanel DockPanel.Dock="Top" Style="{StaticResource SectionHeader}">
+                    <Image Source="{StaticResource Icon.Instance}" Style="{StaticResource SectionHeaderIcon}" />
+                    <TextBlock Text="{Binding InstanceTerm}" Style="{StaticResource SectionTitle}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                </StackPanel>
                 <TextBox DockPanel.Dock="Top" IsReadOnly="True" Text="{Binding Selected.Id}" />
+
+                <!--
+                    空态：没有任何实例时用品牌标识与引导文案占位，避免左侧出现一片空白。
+                    判定直接依赖集合计数，不要求视图模型额外暴露派生属性。
+                -->
+                <Border DockPanel.Dock="Top">
+                    <Border.Style>
+                        <Style TargetType="Border" BasedOn="{StaticResource EmptyStateFadeIn}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Instances.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel HorizontalAlignment="Center">
+                        <Image Source="{StaticResource Brand.MarkInverse}"
+                               Width="{DynamicResource Brand.Mark.Size.Empty}"
+                               Height="{DynamicResource Brand.Mark.Size.Empty}"
+                               HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding EmptyHintText}"
+                                   Style="{StaticResource HintText}"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   Margin="{DynamicResource Space.Margin.HeaderStack}" />
+                    </StackPanel>
+                </Border>
+
                 <ListBox ItemsSource="{Binding Instances}"
                          SelectedItem="{Binding Selected, Mode=TwoWay}">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <StackPanel Margin="{DynamicResource Token.Space.Sm}">
-                                <TextBlock Text="{Binding DisplayName}" FontSize="{DynamicResource Token.Font.Subtitle}" />
-                                <TextBlock Text="{Binding StateLabel}" FontSize="{DynamicResource Token.Font.Caption}"
-                                           Foreground="{DynamicResource Token.Color.Text.Secondary}" />
-                                <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
-                                           Foreground="{DynamicResource Token.Color.Text.Secondary}">
-                                    <Run Text="{Binding ImageDisplayName, Mode=OneWay}" />
-                                </TextBlock>
-                                <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
-                                           Foreground="{DynamicResource Token.Color.Text.Secondary}">
-                                    <Run Text="Android " /><Run Text="{Binding AndroidVersion, Mode=OneWay}" />
-                                </TextBlock>
-                                <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
-                                           Foreground="{DynamicResource Token.Color.Text.Secondary}">
-                                    <Run Text="{Binding ExposureLabel, Mode=OneWay}" />
-                                </TextBlock>
-                            </StackPanel>
+                            <Grid Margin="{DynamicResource Token.Space.Sm}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- 状态列：图标只表示状态，不表示原因，原因由状态文案与详情区承担。 -->
+                                <Image Grid.Column="0"
+                                       Source="{Binding State, Converter={StaticResource StateIcon}}"
+                                       Style="{StaticResource SectionHeaderIcon}"
+                                       ToolTip="{Binding StateLabel}" />
+
+                                <StackPanel Grid.Column="1" Margin="{DynamicResource Space.Margin.BesideIcon}">
+                                    <TextBlock Text="{Binding DisplayName}" FontSize="{DynamicResource Token.Font.Subtitle}" />
+                                    <Border Style="{StaticResource StatusPill}" HorizontalAlignment="Left">
+                                        <TextBlock Text="{Binding StateLabel}"
+                                                   FontSize="{DynamicResource Token.Font.Caption}"
+                                                   Foreground="{DynamicResource Token.Color.Text.Secondary}"
+                                                   Margin="0" />
+                                    </Border>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Image Source="{StaticResource Icon.Image}"
+                                               Style="{StaticResource SectionHeaderIcon}"
+                                               ToolTip="镜像" />
+                                        <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
+                                                   Foreground="{DynamicResource Token.Color.Text.Secondary}"
+                                                   VerticalAlignment="Center">
+                                            <Run Text="{Binding ImageDisplayName, Mode=OneWay}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                    <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
+                                               Foreground="{DynamicResource Token.Color.Text.Secondary}">
+                                        <Run Text="Android " /><Run Text="{Binding AndroidVersion, Mode=OneWay}" />
+                                    </TextBlock>
+                                    <StackPanel Orientation="Horizontal">
+                                        <Image Source="{StaticResource Icon.Exposure}"
+                                               Style="{StaticResource SectionHeaderIcon}"
+                                               ToolTip="暴露级别" />
+                                        <TextBlock FontSize="{DynamicResource Token.Font.Caption}"
+                                                   Foreground="{DynamicResource Token.Color.State.Warning}"
+                                                   VerticalAlignment="Center">
+                                            <Run Text="{Binding ExposureLabel, Mode=OneWay}" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Grid>
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
@@ -55,45 +160,182 @@
             <!-- 右侧：详情与操作区 -->
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
                 <StackPanel>
-                    <TextBlock Style="{StaticResource SectionTitle}" Text="实例详情" />
-                    <Border Style="{StaticResource Card}">
+                    <StackPanel Style="{StaticResource SectionHeader}">
+                        <Image Source="{StaticResource Icon.Instance}" Style="{StaticResource SectionHeaderIcon}" />
+                        <TextBlock Text="实例详情" Style="{StaticResource SectionTitle}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                    </StackPanel>
+                    <Border Style="{StaticResource DialogCard}">
                         <TextBlock Text="{Binding DetailText}" TextWrapping="Wrap" />
                     </Border>
 
-                    <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Space.Md}">
-                        <Button Content="{Binding StartTerm}" Command="{Binding StartSelectedCommand}" />
-                        <Button Content="{Binding StopTerm}" Command="{Binding StopSelectedCommand}" />
-                        <Button Content="{Binding CreateInstanceText}" Click="OnCreateInstance" />
-                        <Button Content="{Binding ExportDiagnosticsText}" Click="OnChooseDiagnosticsDirectory" />
-                    </StackPanel>
+                    <!-- 操作区：动作图标与文案并置，图标承担识别，文案承担确切命名。 -->
+                    <WrapPanel Margin="{DynamicResource Token.Space.Md}">
+                        <Button Command="{Binding StartSelectedCommand}">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Start}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding StartTerm}"
+                                           Foreground="{DynamicResource Token.Color.Text.Inverse}"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
+                        <Button Command="{Binding StopSelectedCommand}">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Stop}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding StopTerm}"
+                                           Foreground="{DynamicResource Token.Color.Text.Inverse}"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
+                        <Button Click="OnCreateInstance">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Instance}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding CreateInstanceText}"
+                                           Foreground="{DynamicResource Token.Color.Text.Inverse}"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource DangerButton}" Click="OnDeleteInstance">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Delete}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="删除" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource SecondaryButton}" Click="OnChooseDiagnosticsDirectory">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Diagnostics}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding ExportDiagnosticsText}"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
+                    </WrapPanel>
 
-                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding InputChannelTitle}" />
+                    <!-- 输入通道：原生输入与投屏两条通路的状态，图标区分通路而不是错误类别。 -->
+                    <StackPanel Style="{StaticResource SectionHeader}">
+                        <Image Source="{StaticResource Icon.InputChannel}" Style="{StaticResource SectionHeaderIcon}" />
+                        <TextBlock Text="{Binding InputChannelTitle}" Style="{StaticResource SectionTitle}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                    </StackPanel>
                     <Border Style="{StaticResource Card}">
                         <StackPanel>
-                            <TextBlock Text="{Binding InputChannelText}" FontWeight="{DynamicResource Token.Weight.Bold}" />
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Projection}"
+                                       Style="{StaticResource SectionHeaderIcon}"
+                                       ToolTip="投屏" />
+                                <TextBlock Text="{Binding InputChannelText}"
+                                           FontWeight="{DynamicResource Token.Weight.Bold}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
                             <TextBlock Text="{Binding InputChannelDetail}"
-                                       TextWrapping="Wrap"
-                                       Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                                       Style="{StaticResource CaptionText}" />
                         </StackPanel>
                     </Border>
 
-                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding FidelityTitle}" />
+                    <!-- 保真度：六项逐项结论，未通过的项同样列出以暴露差距，不做粉饰。 -->
+                    <StackPanel Style="{StaticResource SectionHeader}">
+                        <Image Source="{StaticResource Icon.Fidelity}" Style="{StaticResource SectionHeaderIcon}" />
+                        <TextBlock Text="{Binding FidelityTitle}" Style="{StaticResource SectionTitle}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                    </StackPanel>
                     <Border Style="{StaticResource Card}">
                         <ItemsControl ItemsSource="{Binding FidelityItems}">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
                                     <Grid>
                                         <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{Binding Label}" />
-                                        <TextBlock Grid.Column="1" Text="{Binding Value}"
-                                                   Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                                        <Image Grid.Column="0"
+                                               Source="{StaticResource Icon.Fidelity}"
+                                               Style="{StaticResource SectionHeaderIcon}"
+                                               ToolTip="保真度" />
+                                        <TextBlock Grid.Column="1" Text="{Binding Label}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                                        <TextBlock Grid.Column="2" Text="{Binding Value}"
+                                                   Foreground="{DynamicResource Token.Color.Text.Secondary}"
+                                                   VerticalAlignment="Center" />
                                     </Grid>
                                 </DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                    </Border>
+
+                    <!-- 设备标识：每实例独立且不得复用，规格要求在界面上可见。 -->
+                    <StackPanel Style="{StaticResource SectionHeader}">
+                        <Image Source="{StaticResource Icon.DeviceIdentity}" Style="{StaticResource SectionHeaderIcon}" />
+                        <TextBlock Text="{DynamicResource Text.DeviceIdentityTitle}" Style="{StaticResource SectionTitle}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                    </StackPanel>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding Selected.Spec.DeviceIdentity.SerialNo}"
+                                       FontWeight="{DynamicResource Token.Weight.Medium}" />
+                            <TextBlock Text="{Binding Selected.Spec.DeviceIdentity.AndroidId}"
+                                       Style="{StaticResource CaptionText}" />
+                            <TextBlock Text="{DynamicResource Text.DeviceIdentityHint}"
+                                       Style="{StaticResource HintText}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 多开视图：并行实例数量与传输入口，图标对应规格中的多开与文件传输语义。 -->
+                    <StackPanel Style="{StaticResource SectionHeader}">
+                        <Image Source="{StaticResource Icon.MultiInstance}" Style="{StaticResource SectionHeaderIcon}" />
+                        <TextBlock Text="{DynamicResource Text.ParallelTitle}" Style="{StaticResource SectionTitle}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                    </StackPanel>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.FileTransfer}"
+                                       Style="{StaticResource SectionHeaderIcon}"
+                                       ToolTip="文件传输" />
+                                <TextBlock Text="{DynamicResource Text.FileTransferTitle}"
+                                           FontWeight="{DynamicResource Token.Weight.Medium}"
+                                           VerticalAlignment="Center"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding Instances.Count}" FontSize="{DynamicResource Token.Font.Subtitle}" />
+                            <TextBlock Text="{DynamicResource Text.ParallelCountLabel}" Style="{StaticResource CaptionText}" />
+                            <TextBlock Text="{DynamicResource Text.FileTransferHint}" Style="{DynamicResource CaptionText}" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- 宿主环境错误：错误分类必须靠文案说明，此处只提供归类图形。 -->
+                    <StackPanel Style="{StaticResource SectionHeader}">
+                        <Image Source="{StaticResource Icon.ErrorEnvironment}" Style="{StaticResource SectionHeaderIcon}" />
+                        <TextBlock Text="{DynamicResource Text.HostEnvironmentTitle}" Style="{StaticResource SectionTitle}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                    </StackPanel>
+                    <Border Style="{StaticResource Card}">
+                        <TextBlock Text="{DynamicResource Text.HostEnvironmentHint}"
+                                   Style="{DynamicResource CaptionText}" />
+                    </Border>
+
+                    <!-- 快照与恢复：磁盘链的进退两个方向，恢复即切换磁盘链顶层，不可逆，须二次确认。 -->
+                    <StackPanel Style="{StaticResource SectionHeader}">
+                        <Image Source="{StaticResource Icon.Snapshot}" Style="{StaticResource SectionHeaderIcon}" />
+                        <TextBlock Text="{DynamicResource Text.SnapshotTitle}" Style="{StaticResource SectionTitle}" Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                    </StackPanel>
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Restore}"
+                                       Style="{StaticResource SectionHeaderIcon}"
+                                       ToolTip="恢复" />
+                                <TextBlock Text="{DynamicResource Text.RestoreHint}" Style="{DynamicResource CaptionText}" />
+                            </StackPanel>
+                            <TextBlock Text="{DynamicResource Text.SnapshotHint}" Style="{DynamicResource HintText}" />
+                        </StackPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>

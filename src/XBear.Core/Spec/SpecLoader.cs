@@ -28,6 +28,9 @@ public sealed class SpecLoader
     /// <summary>镜像清单 Schema 文件名。</summary>
     public const string ImageSchemaFileName = "image.schema.json";
 
+    /// <summary>实例快照 Schema 文件名。</summary>
+    public const string SnapshotSchemaFileName = "snapshot.schema.json";
+
     /// <summary>术语表 Schema 文件名。</summary>
     public const string TerminologySchemaFileName = "terminology.schema.json";
 
@@ -40,11 +43,29 @@ public sealed class SpecLoader
     /// <summary>镜像清单样例文件名。</summary>
     public const string ImageFixtureName = "image.json";
 
+    /// <summary>最小快照样例文件名，只含必填字段。</summary>
+    public const string SnapshotMinimalFixtureName = "snapshot-minimal.json";
+
+    /// <summary>完整快照样例文件名，含可选字段与平台特有字段。</summary>
+    public const string SnapshotFullFixtureName = "snapshot-full.json";
+
     /// <summary>术语表文件名。</summary>
     public const string TerminologyFileName = "terminology.json";
 
+    /// <summary>版本契约文件名。</summary>
+    public const string VersionFileName = "version.json";
+
+    /// <summary>性能基线文件名。</summary>
+    public const string BaselineFileName = "baseline.json";
+
     /// <summary>设计令牌文件名。</summary>
     public const string DesignTokensFileName = "design-tokens.json";
+
+    /// <summary>品牌目录名。</summary>
+    public const string BrandDirectoryName = "brand";
+
+    /// <summary>品牌配色映射文件名。</summary>
+    public const string PaletteFileName = "palette.json";
 
     private readonly JsonSerializerOptions _readOptions = new()
     {
@@ -151,6 +172,22 @@ public sealed class SpecLoader
     /// <returns>解析后的镜像清单。</returns>
     public ImageSpec LoadImageFile(string absolutePath) => ParseImage(ReadText(absolutePath));
 
+    /// <summary>读取并解析指定样例文件中的快照元数据。</summary>
+    /// <param name="fixtureFileName">样例文件名。</param>
+    /// <returns>解析后的快照元数据。</returns>
+    public SnapshotSpec LoadSnapshotFixture(string fixtureFileName) =>
+        ParseSnapshot(ReadFixtureText(fixtureFileName));
+
+    /// <summary>读取并解析版本契约。</summary>
+    /// <returns>解析后的版本契约文档。</returns>
+    public VersionDocument LoadVersion() =>
+        ParseVersion(ReadText(Path.Combine(SpecRoot, VersionFileName)));
+
+    /// <summary>读取并解析性能基线。</summary>
+    /// <returns>解析后的性能基线文档。</returns>
+    public PerformanceBaseline LoadBaseline() =>
+        ParseBaseline(ReadText(Path.Combine(SpecRoot, BaselineFileName)));
+
     /// <summary>读取并解析术语表。</summary>
     /// <returns>解析后的术语表文档。</returns>
     public TerminologyDocument LoadTerminology() =>
@@ -160,6 +197,11 @@ public sealed class SpecLoader
     /// <returns>解析后的设计令牌。</returns>
     public DesignTokens LoadDesignTokens() =>
         DesignTokens.Parse(ReadText(Path.Combine(SpecRoot, TokensDirectoryName, DesignTokensFileName)));
+
+    /// <summary>读取并解析品牌配色映射。</summary>
+    /// <returns>解析后的品牌调色板契约文档。</returns>
+    public PaletteDocument LoadPalette() =>
+        ParsePalette(ReadText(Path.Combine(SpecRoot, BrandDirectoryName, PaletteFileName)));
 
     /// <summary>
     /// 解析实例配置 JSON。
@@ -196,6 +238,42 @@ public sealed class SpecLoader
         var doc = Deserialize<TerminologyDocument>(json, "术语表");
         return doc;
     }
+
+    /// <summary>
+    /// 解析快照元数据 JSON。
+    /// </summary>
+    /// <param name="json">快照元数据 JSON 文本。</param>
+    /// <returns>解析后的快照元数据。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public SnapshotSpec ParseSnapshot(string json) =>
+        Deserialize<SnapshotSpec>(json, "快照元数据");
+
+    /// <summary>
+    /// 解析版本契约 JSON。
+    /// </summary>
+    /// <param name="json">版本契约 JSON 文本。</param>
+    /// <returns>解析后的版本契约文档。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public VersionDocument ParseVersion(string json) =>
+        Deserialize<VersionDocument>(json, "版本契约");
+
+    /// <summary>
+    /// 解析性能基线 JSON。
+    /// </summary>
+    /// <param name="json">性能基线 JSON 文本。</param>
+    /// <returns>解析后的性能基线文档。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public PerformanceBaseline ParseBaseline(string json) =>
+        Deserialize<PerformanceBaseline>(json, "性能基线");
+
+    /// <summary>
+    /// 解析品牌配色映射 JSON。
+    /// </summary>
+    /// <param name="json">品牌配色映射 JSON 文本。</param>
+    /// <returns>解析后的品牌调色板契约文档。</returns>
+    /// <exception cref="XBearException">JSON 非法或缺少 roles 节点时抛出。</exception>
+    public PaletteDocument ParsePalette(string json) =>
+        PaletteDocument.Parse(json);
 
     private T Deserialize<T>(string json, string what)
     {

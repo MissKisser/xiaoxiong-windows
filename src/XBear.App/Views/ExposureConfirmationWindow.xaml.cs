@@ -1,5 +1,7 @@
 using System.Windows;
+using System.Windows.Media.Imaging;
 using XBear.App.Presentation;
+using XBear.App.Theme;
 using XBear.App.ViewModels;
 
 namespace XBear.App.Views;
@@ -22,6 +24,11 @@ public partial class ExposureConfirmationWindow : Window
 
         InitializeComponent();
         DataContext = _viewModel = viewModel;
+
+        if (WindowIcon.Create(Application.Current?.Resources ?? new ResourceDictionary()) is BitmapSource icon)
+        {
+            Icon = icon;
+        }
     }
 
     private void OnConfirm(object sender, RoutedEventArgs e)

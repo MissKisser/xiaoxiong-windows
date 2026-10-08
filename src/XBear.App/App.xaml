@@ -2,10 +2,35 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:local="clr-namespace:XBear.App.Presentation"
+             xmlns:theme="clr-namespace:XBear.App.Theme"
+             xmlns:system="clr-namespace:System;assembly=mscorlib"
              StartupUri="MainWindow.xaml">
     <Application.Resources>
         <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <!-- 图标集与品牌资产来自共享规格，取值仍经由 Token.* 与 Palette.* 资源键，不在标记内写字面值。 -->
+                <ResourceDictionary Source="Theme/IconResources.xaml" />
+                <ResourceDictionary Source="Theme/BrandResources.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
             <local:BoolToVisibilityConverter x:Key="BoolToVisibility" />
+            <theme:StateIconConverter x:Key="StateIcon" />
+
+            <!--
+                静态说明文案。这些文字描述图标与能力的语义，不是实例数据，
+                因此以资源键集中登记，界面各处引用同一份，避免文案漂移。
+            -->
+            <system:String x:Key="Text.DeviceIdentityTitle">设备标识</system:String>
+            <system:String x:Key="Text.DeviceIdentityHint">每个实例持有独立标识，不得跨实例复用。</system:String>
+            <system:String x:Key="Text.ParallelTitle">多开与传输</system:String>
+            <system:String x:Key="Text.ParallelCountLabel">当前实例总数</system:String>
+            <system:String x:Key="Text.FileTransferTitle">文件传输</system:String>
+            <system:String x:Key="Text.FileTransferHint">宿主与实例之间的双向文件复制，两个方向的通路都必须存在。</system:String>
+            <system:String x:Key="Text.HostEnvironmentTitle">宿主环境错误</system:String>
+            <system:String x:Key="Text.HostEnvironmentHint">虚拟化组件缺失或未启用时，宿主不满足运行前提。这类错误必须在启动前拦截并给出修复指引，错误类别靠文案说明，不靠图标区分。</system:String>
+            <system:String x:Key="Text.SnapshotTitle">快照</system:String>
+            <system:String x:Key="Text.RestoreHint">恢复即切换磁盘链顶层</system:String>
+            <system:String x:Key="Text.SnapshotHint">创建快照后可以回退到该层。恢复不可逆，须二次确认。</system:String>
             <!-- 视觉取值一律引用设计令牌，XAML 内不出现字面量颜色、字号与间距。 -->
             <Style TargetType="Window">
                 <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Base}" />
@@ -24,6 +49,44 @@
                 <Setter Property="Foreground" Value="{DynamicResource Token.Color.Brand.Primary}" />
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Subtitle}" />
                 <Setter Property="FontWeight" Value="{DynamicResource Token.Weight.Medium}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Space.Md}" />
+            </Style>
+
+            <!--
+                复合间距。XAML 的 Thickness 无法在标记扩展里拼接组件，
+                因此把常用组合在此处集中定义，值仍取自间距令牌。
+            -->
+            <Thickness x:Key="Space.Margin.BesideIcon">{DynamicResource Token.Space.Sm}</Thickness>
+            <Thickness x:Key="Space.Margin.Section">0,{DynamicResource Token.Space.Xl},0,0</Thickness>
+            <Thickness x:Key="Space.Margin.HeaderStack">{DynamicResource Token.Space.Md}</Thickness>
+
+            <!-- 分区标题的图标与标题基线对齐，间距取小档以免和正文抢视觉重量。 -->
+            <Style x:Key="SectionHeader" TargetType="StackPanel">
+                <Setter Property="Orientation" Value="Horizontal" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Space.Md}" />
+            </Style>
+
+            <Style x:Key="SectionHeaderIcon" TargetType="Image">
+                <Setter Property="Width" Value="{DynamicResource Icon.Size.Md}" />
+                <Setter Property="Height" Value="{DynamicResource Icon.Size.Md}" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Margin" Value="0,0,0,0" />
+                <Setter Property="SnapsToDevicePixels" Value="True" />
+            </Style>
+
+            <!-- 次要说明文字：用于卡片内的补充说明，不承担状态语义。 -->
+            <Style x:Key="CaptionText" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{DynamicResource Token.Color.Text.Secondary}" />
+                <Setter Property="FontSize" Value="{DynamicResource Token.Font.Caption}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Space.Sm}" />
+            </Style>
+
+            <!-- 信息色文字：用于提示性说明，不用于承载状态结论。 -->
+            <Style x:Key="HintText" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="{DynamicResource Token.Color.State.Info}" />
+                <Setter Property="FontSize" Value="{DynamicResource Token.Font.Caption}" />
+                <Setter Property="TextWrapping" Value="Wrap" />
                 <Setter Property="Margin" Value="{DynamicResource Token.Space.Sm}" />
             </Style>
 
@@ -34,6 +97,22 @@
                 <Setter Property="Margin" Value="{DynamicResource Token.Space.Xs}" />
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Body}" />
                 <Setter Property="Cursor" Value="Hand" />
+            </Style>
+
+            <!-- 次级按钮：轮廓按钮，承载诊断、探测这类不改变实例状态的动作。 -->
+            <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Raised}" />
+                <Setter Property="Foreground" Value="{DynamicResource Token.Color.Text.Primary}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Token.Color.Brand.Secondary}" />
+                <Setter Property="BorderThickness" Value="1" />
+            </Style>
+
+            <!-- 危险动作按钮：删除是高影响操作，用警告语义色描边而非实心主色。 -->
+            <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Raised}" />
+                <Setter Property="Foreground" Value="{DynamicResource Token.Color.State.Danger}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Token.Color.State.Danger}" />
+                <Setter Property="BorderThickness" Value="1" />
             </Style>
 
             <Style TargetType="TextBox">
@@ -59,17 +138,109 @@
                 <Setter Property="FontSize" Value="{DynamicResource Token.Font.Body}" />
             </Style>
 
+            <Style TargetType="RadioButton">
+                <Setter Property="Foreground" Value="{DynamicResource Token.Color.Text.Primary}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Space.Sm}" />
+                <Setter Property="FontSize" Value="{DynamicResource Token.Font.Body}" />
+            </Style>
+
+            <!-- 顶部风险条。警告语义色作描边，正文仍用反色文字保证在深底上可读。 -->
             <Style x:Key="RiskBanner" TargetType="Border">
                 <Setter Property="Background" Value="{DynamicResource Token.Color.State.Danger}" />
                 <Setter Property="Padding" Value="{DynamicResource Token.Space.Md}" />
                 <Setter Property="Margin" Value="{DynamicResource Token.Space.Md}" />
+                <Setter Property="CornerRadius" Value="{DynamicResource Token.Radius.Sm}" />
             </Style>
 
+            <!-- 卡片：抬升面底色配卡片级投影，投影参数全部来自 elevation.card 令牌。 -->
             <Style x:Key="Card" TargetType="Border">
                 <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Raised}" />
                 <Setter Property="Padding" Value="{DynamicResource Token.Space.Md}" />
                 <Setter Property="Margin" Value="{DynamicResource Token.Space.Md}" />
                 <Setter Property="CornerRadius" Value="{DynamicResource Token.Radius.Md}" />
+                <Setter Property="BorderBrush" Value="{DynamicResource Token.Color.Surface.Overlay}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="Effect" Value="{DynamicResource Elevation.Card}" />
+            </Style>
+
+            <!-- 对话卡片：层级高于普通卡片，使用 dialog 级投影与大圆角。 -->
+            <Style x:Key="DialogCard" TargetType="Border" BasedOn="{StaticResource Card}">
+                <Setter Property="CornerRadius" Value="{DynamicResource Token.Radius.Lg}" />
+                <Setter Property="Effect" Value="{DynamicResource Elevation.Dialog}" />
+            </Style>
+
+            <!-- 状态胶囊：列表行内的状态文字，用全圆角与抬升面区分于正文。 -->
+            <Style x:Key="StatusPill" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Raised}" />
+                <Setter Property="CornerRadius" Value="{DynamicResource Token.Radius.Full}" />
+                <Setter Property="Padding" Value="{DynamicResource Token.Space.Sm}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Space.Xs}" />
+            </Style>
+
+            <!-- 空态：品牌图形与引导文案居中呈现，遮罩底色取 surface.overlay 令牌。 -->
+            <Style x:Key="EmptyState" TargetType="Border">
+                <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Overlay}" />
+                <Setter Property="CornerRadius" Value="{DynamicResource Token.Radius.Lg}" />
+                <Setter Property="Padding" Value="{DynamicResource Token.Space.Xl}" />
+                <Setter Property="Margin" Value="{DynamicResource Token.Space.Md}" />
+            </Style>
+
+            <!--
+                对话框入场过渡。弹窗内容默认全不透明并立即显示，
+                由 Loaded 事件触发的 DoubleAnimation 用 motion.normal 令牌时长淡入，
+                避免界面以无过渡的生硬方式弹出。
+            -->
+            <Style x:Key="FadeInOnLoad" TargetType="FrameworkElement">
+                <Setter Property="Opacity" Value="0" />
+                <Style.Triggers>
+                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                 To="1"
+                                                 Duration="{DynamicResource Motion.Duration.Normal}" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Style.Triggers>
+            </Style>
+
+            <!--
+                风险条入场过渡。风险条平时折叠，HasRisk 由 false 变为 true 时才淡入，
+                用 motion.fast 令牌时长——变化必须被立刻察觉，因此取最快的档位。
+            -->
+            <Style x:Key="RiskBannerFadeIn" TargetType="Border" BasedOn="{StaticResource RiskBanner}">
+                <Style.Triggers>
+                    <DataTrigger Binding="{Binding HasRisk}" Value="True">
+                        <DataTrigger.EnterActions>
+                            <BeginStoryboard>
+                                <Storyboard>
+                                    <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                     To="1"
+                                                     Duration="{DynamicResource Motion.Duration.Fast}" />
+                                </Storyboard>
+                            </BeginStoryboard>
+                        </DataTrigger.EnterActions>
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        <!--
+                空态入场过渡。空态只在没有任何实例时出现，是一次性的落位提示而非频繁状态切换，
+                因此取 motion.slow 令牌时长，让品牌图形有足够时间稳住再交出注意力。
+            -->
+            <Style x:Key="EmptyStateFadeIn" TargetType="Border" BasedOn="{StaticResource EmptyState}">
+                <Setter Property="Opacity" Value="0" />
+                <Style.Triggers>
+                    <EventTrigger RoutedEvent="FrameworkElement.Loaded">
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                 To="1"
+                                                 Duration="{DynamicResource Motion.Duration.Slow}" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </EventTrigger>
+                </Style.Triggers>
             </Style>
         </ResourceDictionary>
     </Application.Resources>

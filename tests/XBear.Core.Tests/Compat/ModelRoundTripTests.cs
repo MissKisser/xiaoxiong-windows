@@ -164,6 +164,69 @@ public class ModelRoundTripTests
         Assert.Equal("socks5", spec.Network!.Proxy!.Type);
     }
 
+    [Fact]
+    public void CpuModelSurvivesRoundTrip()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["resources"]!["cpuModel"] = "qemu64";
+
+        var first = SpecTestHost.Loader.ParseInstance(sample.ToJsonString());
+        var reserialized = JsonSerializer.Serialize(first, SpecLoader.SerializerOptions);
+        var second = SpecTestHost.Loader.ParseInstance(reserialized);
+
+        Assert.Equal("qemu64", first.Resources.CpuModel);
+        Assert.Equal("qemu64", second.Resources.CpuModel);
+        Assert.Contains("\"cpuModel\": \"qemu64\"", reserialized, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 向后兼容：未声明 cpuModel 的存量实例文件必须解析为缺省值，
+    /// 且再次写出时不得凭空补出该键，否则会把可选字段固化进实例文件。
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(InstanceSampleFiles))]
+    public void InstanceFileWithoutCpuModelParsesToNullAndIsNotWrittenBack(string fixtureFileName)
+    {
+        var json = SpecTestHost.Loader.ReadFixtureText(fixtureFileName);
+
+        var spec = SpecTestHost.Loader.ParseInstance(json);
+
+        Assert.Null(spec.Resources.CpuModel);
+
+        var reserialized = JsonSerializer.Serialize(spec, SpecLoader.SerializerOptions);
+        Assert.DoesNotContain("cpuModel", reserialized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RoundTrippedCpuModelStillPassesSchema()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["resources"]!["cpuModel"] = "qemu64";
+
+        var spec = SpecTestHost.Loader.ParseInstance(sample.ToJsonString());
+        var reserialized = JsonSerializer.Serialize(spec, SpecLoader.SerializerOptions);
+
+        var result = SpecTestHost.Validator.ValidateInstance(reserialized);
+
+        Assert.True(result.IsValid, result.DescribeErrors());
+    }
+
+    /// <summary>
+    /// 契约把 cpuModel 声明为可空字符串，缺省由平台按镜像指令集要求选型，
+    /// 因此显式 null 必须同样合法，写入侧不做臆测。
+    /// </summary>
+    [Fact]
+    public void SchemaAcceptsExplicitNullCpuModel()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["resources"]!["cpuModel"] = null;
+
+        var result = SpecTestHost.Validator.ValidateInstance(sample.ToJsonString());
+
+        Assert.True(result.IsValid, result.DescribeErrors());
+        Assert.Null(SpecTestHost.Loader.ParseInstance(sample.ToJsonString()).Resources.CpuModel);
+    }
+
     /// <summary>
     /// 递归收集 JSON 文档中全部叶子节点路径与取值，用于比对往返前后的字段集合。
     /// </summary>

@@ -1,0 +1,72 @@
+<Window x:Class="XBear.App.Views.AboutWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="关于小熊模拟器" Height="480" Width="520"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False">
+    <Border Style="{DynamicResource FadeInOnLoad}" Padding="{DynamicResource Token.Space.Xl}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- 品牌横版标识与应用图标展示 -->
+            <StackPanel Grid.Row="0" HorizontalAlignment="Center" Margin="{DynamicResource Space.Margin.HeaderStack}">
+                <Image Source="{DynamicResource Brand.HorizontalMark}"
+                       Height="{DynamicResource Brand.Mark.Size.Horizontal}"
+                       HorizontalAlignment="Center" />
+                <Image Source="{DynamicResource Brand.AppIcon}"
+                       Width="{DynamicResource Brand.Mark.Size.Md}"
+                       Height="{DynamicResource Brand.Mark.Size.Md}"
+                       HorizontalAlignment="Center"
+                       Margin="{DynamicResource Space.Margin.BesideIcon}" />
+            </StackPanel>
+
+            <!-- 版本信息卡片 -->
+            <Border Grid.Row="1" Style="{DynamicResource Card}">
+                <StackPanel VerticalAlignment="Center">
+                    <Grid Margin="{DynamicResource Token.Space.Sm}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="产品版本："
+                                   FontWeight="{DynamicResource Token.Weight.Medium}" />
+                        <TextBlock Grid.Column="1" Text="{Binding ProductVersion}"
+                                   Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                    </Grid>
+
+                    <Grid Margin="{DynamicResource Token.Space.Sm}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="规格版本："
+                                   FontWeight="{DynamicResource Token.Weight.Medium}" />
+                        <TextBlock Grid.Column="1" Text="{Binding SpecVersion}"
+                                   Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                    </Grid>
+
+                    <Grid Margin="{DynamicResource Token.Space.Sm}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="构建标识："
+                                   FontWeight="{DynamicResource Token.Weight.Medium}" />
+                        <TextBlock Grid.Column="1" Text="{Binding BuildId}"
+                                   Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <!-- 底部操作按钮 -->
+            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="{DynamicResource Space.Margin.Section}">
+                <Button Content="关闭" IsDefault="True" IsCancel="True" Click="OnClose" />
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

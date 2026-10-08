@@ -147,6 +147,34 @@ internal static class SpecTestHost
         Loader.ReadFixtureText(SpecLoader.ImageFixtureName);
 
     /// <summary>
+    /// 读取只含必填字段的最小快照样例文本。
+    /// </summary>
+    /// <returns>样例文件文本。</returns>
+    public static string SnapshotMinimalJson() =>
+        Loader.ReadFixtureText(SpecLoader.SnapshotMinimalFixtureName);
+
+    /// <summary>
+    /// 读取含全部可选字段的完整快照样例文本。
+    /// </summary>
+    /// <returns>样例文件文本。</returns>
+    public static string SnapshotFullJson() =>
+        Loader.ReadFixtureText(SpecLoader.SnapshotFullFixtureName);
+
+    /// <summary>
+    /// 读取版本契约文本。
+    /// </summary>
+    /// <returns>版本契约文件文本。</returns>
+    public static string VersionJson() =>
+        Loader.ReadText(Path.Combine(Loader.SpecRoot, SpecLoader.VersionFileName));
+
+    /// <summary>
+    /// 读取性能基线文本。
+    /// </summary>
+    /// <returns>性能基线文件文本。</returns>
+    public static string BaselineJson() =>
+        Loader.ReadText(Path.Combine(Loader.SpecRoot, SpecLoader.BaselineFileName));
+
+    /// <summary>
     /// 读取术语表文档。
     /// </summary>
     /// <returns>解析后的术语表。</returns>

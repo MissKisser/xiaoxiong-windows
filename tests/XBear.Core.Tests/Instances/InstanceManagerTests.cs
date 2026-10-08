@@ -321,4 +321,30 @@ public sealed class InstanceManagerTests : IDisposable
         Assert.Equal(3, _manager.AllocatedPorts.Count);
         Assert.Equal(3, _manager.AllocatedPorts.Values.Select(p => p.Adb).Distinct().Count());
     }
+
+    [Fact]
+    public async Task 停止实例时_自动结束采样并将指标落盘到数据目录()
+    {
+        await _manager.StartAsync("inst-01");
+        await _manager.StopAsync("inst-01");
+
+        string metricsPath = _manager.GetMetricsFilePath("inst-01");
+        Assert.True(File.Exists(metricsPath));
+
+        string json = await File.ReadAllTextAsync(metricsPath);
+        Assert.Contains("inst-01", json);
+        Assert.Contains("startup", json);
+    }
+
+    [Fact]
+    public void 多开密度档位与劣化评估_提供非阻断评估与比较通道()
+    {
+        DensityAdvice advice = _manager.GetDensityAdvice(currentCount: 0);
+        Assert.NotNull(advice);
+        Assert.True(advice.RecommendedLimit >= 1);
+
+        RegressionEvaluation eval = _manager.EvaluateRegression(100.0, 115.0);
+        Assert.True(eval.IsAcceptable);
+        Assert.Equal(15.0, eval.DegradationPercent, 1);
+    }
 }

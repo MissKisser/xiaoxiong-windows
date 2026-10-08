@@ -52,6 +52,12 @@ public interface QemuProcessHandle : IAsyncDisposable
     /// <param name="timeout">等待超时，超时后强杀。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     Task StopAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 获取当前进程工作集物理内存大小（字节）。若不可用或进程已退出则返回 null。
+    /// </summary>
+    /// <returns>工作集物理内存字节数，不可用时为 null。</returns>
+    long? GetWorkingSetBytes() => null;
 }
 
 /// <summary>管理 base 镜像与每实例 overlay 的链式关系。</summary>

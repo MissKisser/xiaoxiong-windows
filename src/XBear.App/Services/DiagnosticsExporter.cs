@@ -1,5 +1,6 @@
 using System.IO;
 using System.IO.Compression;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using XBear.Core.Abstractions;
@@ -15,14 +16,74 @@ public sealed class DiagnosticsExporter
 {
     private readonly SpecLoader _loader;
 
+    /// <summary>版本契约文档，版本号一律来自契约。</summary>
+    public VersionDocument Version { get; }
+
+    /// <summary>统一构建标识，格式为 {productVersion}+{commitShort}。</summary>
+    public string BuildId { get; }
+
     /// <summary>
     /// 构造导出器。
     /// </summary>
-    /// <param name="loader">规格读取器，用于附带镜像清单。</param>
-    public DiagnosticsExporter(SpecLoader loader)
+    /// <param name="loader">规格读取器，用于附带镜像清单与版本契约。</param>
+    /// <param name="assembly">用于解析提交哈希的程序集，为空时取当前导出器所在程序集。</param>
+    public DiagnosticsExporter(SpecLoader loader, Assembly? assembly = null)
+        : this(loader, ResolveCommitShort(assembly))
+    {
+    }
+
+    /// <summary>
+    /// 构造导出器，支持显式传入提交短哈希（供测试直接注入验证）。
+    /// </summary>
+    /// <param name="loader">规格读取器。</param>
+    /// <param name="commitShort">提交短哈希，为空时自动回退为 local。</param>
+    public DiagnosticsExporter(SpecLoader loader, string commitShort)
     {
         ArgumentNullException.ThrowIfNull(loader);
         _loader = loader;
+        Version = _loader.LoadVersion();
+        string commit = string.IsNullOrWhiteSpace(commitShort) ? "local" : commitShort;
+        BuildId = Version.FormatBuildId(commit);
+    }
+
+    /// <summary>
+    /// 解析提交短哈希。从程序集的 AssemblyInformationalVersion 获取源修订哈希截短，
+    /// 无法解析时回退为明确的占位值 "local"。
+    /// </summary>
+    /// <param name="assembly">目标程序集，为空时取当前导出器所在程序集。</param>
+    /// <returns>提交短哈希或 "local"。</returns>
+    public static string ResolveCommitShort(Assembly? assembly = null)
+    {
+        Assembly target = assembly ?? typeof(DiagnosticsExporter).Assembly;
+        var attribute = target.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+        return ResolveCommitShort(attribute?.InformationalVersion);
+    }
+
+    /// <summary>
+    /// 从 InformationalVersion 字符串解析提交短哈希。
+    /// </summary>
+    /// <param name="informationalVersion">程序集信息版本字符串。</param>
+    /// <returns>提交短哈希或 "local"。</returns>
+    public static string ResolveCommitShort(string? informationalVersion)
+    {
+        if (string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            return "local";
+        }
+
+        int plusIndex = informationalVersion.IndexOf('+');
+        if (plusIndex < 0 || plusIndex >= informationalVersion.Length - 1)
+        {
+            return "local";
+        }
+
+        string rawCommit = informationalVersion[(plusIndex + 1)..].Trim();
+        if (string.IsNullOrEmpty(rawCommit))
+        {
+            return "local";
+        }
+
+        return rawCommit.Length > 7 ? rawCommit[..7] : rawCommit;
     }
 
     /// <summary>
@@ -101,9 +162,10 @@ public sealed class DiagnosticsExporter
         }
     }
 
-    private static void WriteSystemInfo(ZipArchive archive)
+    private void WriteSystemInfo(ZipArchive archive)
     {
         var info = new StringBuilder()
+            .AppendLine("build: " + BuildId)
             .AppendLine("os: " + Environment.OSVersion)
             .AppendLine("runtime: " + Environment.Version)
             .AppendLine("64bit: " + Environment.Is64BitProcess)

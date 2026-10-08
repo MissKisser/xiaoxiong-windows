@@ -2,6 +2,7 @@
 using System.Data;
 using System.IO;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using XBear.App.Theme;
 using XBear.App.ViewModels;
 using XBear.Core.Diagnostics;
@@ -33,7 +34,8 @@ public partial class App : Application
             SpecLoader loader = SpecLoader.Default;
             _services = AppComposition.Create(ResolveDataRoot(), ResolveImageRoot(), loader);
 
-            TokenResources.Apply(_services.Tokens, Resources);
+            // 品牌语义色与令牌同源：palette.json 只登记映射，实际取值仍由令牌提供。
+            TokenResources.Apply(_services.Tokens, Resources, BrandPalette.Load(loader));
 
             var main = new MainWindow();
             main.DataContext = new MainViewModel(
@@ -42,6 +44,11 @@ public partial class App : Application
                 _services.Images,
                 _services.Diagnostics,
                 _services.Terms);
+
+            if (Theme.WindowIcon.Create(Resources) is BitmapSource icon)
+            {
+                main.Icon = icon;
+            }
 
             MainWindow = main;
             main.Show();

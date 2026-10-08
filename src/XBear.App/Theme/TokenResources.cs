@@ -19,8 +19,12 @@ public static class TokenResources
     /// </summary>
     /// <param name="tokens">共享设计令牌访问器。</param>
     /// <param name="resources">目标资源字典。</param>
+    /// <param name="roles">品牌语义色到令牌键的映射，取自 brand/palette.json。</param>
     /// <exception cref="XBearException">令牌缺失或取值非法时抛出，界面不会静默降级。</exception>
-    public static void Apply(DesignTokens tokens, ResourceDictionary resources)
+    public static void Apply(
+        DesignTokens tokens,
+        ResourceDictionary resources,
+        IReadOnlyList<BrandRole>? roles = null)
     {
         ArgumentNullException.ThrowIfNull(tokens);
         ArgumentNullException.ThrowIfNull(resources);
@@ -67,6 +71,15 @@ public static class TokenResources
 
         Put(resources, "Font.Primary", FontFamilyOf(tokens.FontFamilyPrimary));
         Put(resources, "Font.Monospace", FontFamilyOf(tokens.FontFamilyMonospace));
+
+        // 阴影与动效同样属于令牌，登记后才能被样式与过渡动画按资源键消费。
+        ElevationTokens.Apply(tokens, resources);
+        MotionTokens.Apply(tokens, resources);
+
+        if (roles is not null)
+        {
+            BrandPalette.Apply(roles, tokens, resources);
+        }
     }
 
     /// <summary>

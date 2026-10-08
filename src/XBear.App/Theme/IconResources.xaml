@@ -1,0 +1,270 @@
+<!--
+    界面图标集。全部取自共享规格 icons/ 下的 19 个 SVG，等比映射到 24×24 坐标系，
+    Path 几何与原文件的 path data 逐一对应，画刷与画笔一律引用设计令牌，不内联色值。
+    图标是单色前景资产，一律绘制在浅色底上；放到深色底时由调用方改用反色令牌。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- 描边与填充令牌画笔。共享同一实例，避免每个图标重复构造。 -->
+    <Pen x:Key="Icon.Pen.Ink"
+         Brush="{DynamicResource Token.Color.Text.Primary}"
+         Thickness="2"
+         StartLineCap="Round"
+         EndLineCap="Round"
+         LineJoin="Round" />
+    <Pen x:Key="Icon.Pen.Brand"
+         Brush="{DynamicResource Token.Color.Brand.Secondary}"
+         Thickness="2"
+         StartLineCap="Round"
+         EndLineCap="Round"
+         LineJoin="Round" />
+    <Pen x:Key="Icon.Pen.BrandHeavy"
+         Brush="{DynamicResource Token.Color.Brand.Secondary}"
+         Thickness="2.4"
+         StartLineCap="Round"
+         EndLineCap="Round"
+         LineJoin="Round" />
+    <Pen x:Key="Icon.Pen.Warning"
+         Brush="{DynamicResource Token.Color.State.Warning}"
+         Thickness="2"
+         StartLineCap="Round"
+         EndLineCap="Round"
+         LineJoin="Round" />
+    <DashStyle x:Key="Icon.DashStyle.Warning" Dashes="2 2.6" />
+    <Pen x:Key="Icon.Pen.WarningDashed"
+         Brush="{DynamicResource Token.Color.State.Warning}"
+         Thickness="2"
+         StartLineCap="Round"
+         EndLineCap="Round"
+         LineJoin="Round"
+         DashStyle="{StaticResource Icon.DashStyle.Warning}" />
+    <Pen x:Key="Icon.Pen.Danger"
+         Brush="{DynamicResource Token.Color.State.Danger}"
+         Thickness="2"
+         StartLineCap="Round"
+         EndLineCap="Round"
+         LineJoin="Round" />
+
+    <SolidColorBrush x:Key="Icon.Brush.Ink" Color="{DynamicResource Token.Color.Text.Primary}" />
+    <SolidColorBrush x:Key="Icon.Brush.Brand" Color="{DynamicResource Token.Color.Brand.Secondary}" />
+    <SolidColorBrush x:Key="Icon.Brush.Warning" Color="{DynamicResource Token.Color.State.Warning}" />
+    <SolidColorBrush x:Key="Icon.Brush.Danger" Color="{DynamicResource Token.Color.State.Danger}" />
+
+    <!-- 实例与镜像生命周期 -->
+    <DrawingImage x:Key="Icon.Instance">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 5,3 L 19,3 L 19,21 L 5,21 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 8.5,8 L 15.5,8" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 8.5,12 L 15.5,12" Pen="{StaticResource Icon.Pen.Ink}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.Image">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 12,3.5 A 8.5,8.5 0 1 1 11.99,3.5 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 12,9.5 A 2.5,2.5 0 1 1 11.99,9.5 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 12,3.5 A 8.5,8.5 0 0 1 18,6" Pen="{StaticResource Icon.Pen.Brand}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.Start">
+        <DrawingImage.Drawing>
+            <GeometryDrawing Geometry="M 9,5.8 L 18.2,12 L 9,18.2 Z" Brush="{StaticResource Icon.Brush.Brand}">
+                <GeometryDrawing.Pen>
+                    <Pen Brush="{StaticResource Icon.Brush.Brand}" Thickness="2" LineJoin="Round" />
+                </GeometryDrawing.Pen>
+            </GeometryDrawing>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.Stop">
+        <DrawingImage.Drawing>
+            <GeometryDrawing Geometry="M 6.5,6.5 L 17.5,6.5 L 17.5,17.5 L 6.5,17.5 Z" Brush="{StaticResource Icon.Brush.Ink}" />
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.Delete">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 4.5,6.5 L 19.5,6.5" Pen="{StaticResource Icon.Pen.Danger}" />
+                <GeometryDrawing Geometry="M 9.5,6.5 L 9.5,5 A 1.5,1.5 0 0 1 11,3.5 L 13,3.5 A 1.5,1.5 0 0 1 14.5,5 L 14.5,6.5"
+                                 Pen="{StaticResource Icon.Pen.Danger}" />
+                <GeometryDrawing Geometry="M 6.5,6.5 L 7.5,18.5 A 2,2 0 0 0 9.5,20.3 L 14.5,20.3 A 2,2 0 0 0 16.5,18.5 L 17.5,6.5"
+                                 Pen="{StaticResource Icon.Pen.Danger}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!-- 快照与多开 -->
+    <DrawingImage x:Key="Icon.Snapshot">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <DrawingGroup Opacity="0.45">
+                    <GeometryDrawing Geometry="M 4,12.5 L 20,12.5 L 20,21 L 4,21 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                </DrawingGroup>
+                <DrawingGroup Opacity="0.7">
+                    <GeometryDrawing Geometry="M 4,7 L 20,7 L 20,15.5 L 4,15.5 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                </DrawingGroup>
+                <GeometryDrawing Geometry="M 4,3 L 20,3 L 20,11 L 4,11 Z" Brush="{StaticResource Icon.Brush.Brand}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.Restore">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 19.5,12 A 7.5,7.5 0 1 1 16.9,6.2" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 13.8,3.2 L 17.2,3.2 L 17.2,6.6" Pen="{StaticResource Icon.Pen.Ink}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.MultiInstance">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 2.5,7 L 8,7 L 8,17 L 2.5,17 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 9.25,7 L 14.75,7 L 14.75,17 L 9.25,17 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 16,7 L 21.5,7 L 21.5,17 L 16,17 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!-- 交互与传输 -->
+    <DrawingImage x:Key="Icon.Projection">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 2.5,4 L 21.5,4 L 21.5,17 L 2.5,17 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 8.5,20.5 L 15.5,20.5" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 12,17 L 12,20.5" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 9.5,9.5 L 14.5,9.5 M 13,7.5 L 15,9.5 L 13,11.5" Pen="{StaticResource Icon.Pen.Brand}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.InputChannel">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 4.5,3 L 19.5,3 L 19.5,21 L 4.5,21 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 11,8.8 A 2.2,2.2 0 1 1 10.99,8.8 Z" Brush="{StaticResource Icon.Brush.Brand}" />
+                <GeometryDrawing Geometry="M 8.5,16.5 L 15.5,16.5" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 8.5,19 L 12.5,19" Pen="{StaticResource Icon.Pen.Ink}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.FileTransfer">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 7.5,4.5 L 4,8 L 7.5,11.5" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 4,8 L 16,8" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 16.5,12.5 L 20,16 L 16.5,19.5" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 20,16 L 8,16" Pen="{StaticResource Icon.Pen.Ink}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!-- 能力与风险 -->
+    <DrawingImage x:Key="Icon.Fidelity">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 12,2.8 L 20,6 L 20,12.2 C 20,16.5 16.8,19.8 12,21.2 C 7.2,19.8 4,16.5 4,12.2 L 4,6 Z"
+                                 Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 8.4,11.8 L 11,14.4 L 15.6,9.6" Pen="{StaticResource Icon.Pen.BrandHeavy}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.DeviceIdentity">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 6.5,6.5 L 17.5,6.5 L 17.5,17.5 L 6.5,17.5 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 9.5,6.5 L 9.5,3.5 M 14.5,6.5 L 14.5,3.5 M 9.5,20.5 L 9.5,17.5 M 14.5,20.5 L 14.5,17.5"
+                                 Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 6.5,10.5 L 3.5,10.5 M 6.5,13.5 L 3.5,13.5 M 20.5,10.5 L 17.5,10.5 M 20.5,13.5 L 17.5,13.5"
+                                 Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 9.5,12 L 14.5,12" Pen="{StaticResource Icon.Pen.Brand}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.Exposure">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 12,2.8 L 20,6 L 20,12.2 C 20,16.5 16.8,19.8 12,21.2 C 7.2,19.8 4,16.5 4,12.2 L 4,6 Z"
+                                 Pen="{StaticResource Icon.Pen.Warning}" />
+                <GeometryDrawing Geometry="M 12,9.9 A 1.6,1.6 0 1 1 11.99,9.9 Z" Brush="{StaticResource Icon.Brush.Warning}" />
+                <DrawingGroup Opacity="0.55">
+                    <GeometryDrawing Geometry="M 8.6,12.6 A 1.6,1.6 0 1 1 8.59,12.6 Z"
+                                     Brush="{StaticResource Icon.Brush.Warning}" />
+                    <GeometryDrawing Geometry="M 15.4,12.6 A 1.6,1.6 0 1 1 15.39,12.6 Z"
+                                     Brush="{StaticResource Icon.Brush.Warning}" />
+                </DrawingGroup>
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.Diagnostics">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 13.5,3.5 L 7,3.5 A 2,2 0 0 0 5,5.5 L 5,18.5 A 2,2 0 0 0 7,20.5 L 11,20.5"
+                                 Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 13.5,3.5 L 17,7 L 17,9.5" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 8.5,9 L 12.5,9" Pen="{StaticResource Icon.Pen.Ink}" />
+                <GeometryDrawing Geometry="M 15,10 A 4.5,4.5 0 1 1 14.99,10 Z" Pen="{StaticResource Icon.Pen.Brand}" />
+                <GeometryDrawing Geometry="M 18.3,17.8 L 21,20.5" Pen="{StaticResource Icon.Pen.Brand}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.ErrorEnvironment">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 2.8,5.5 L 21.2,5.5 L 21.2,16.5 L 2.8,16.5 Z" Pen="{StaticResource Icon.Pen.Warning}" />
+                <GeometryDrawing Geometry="M 7.5,20.5 L 16.5,20.5" Pen="{StaticResource Icon.Pen.Warning}" />
+                <GeometryDrawing Geometry="M 12,16.5 L 12,20.5" Pen="{StaticResource Icon.Pen.Warning}" />
+                <GeometryDrawing Geometry="M 8.6,11 L 12,8.6 L 15.4,11" Pen="{StaticResource Icon.Pen.Warning}" />
+                <GeometryDrawing Geometry="M 8.6,14.4 L 15.4,14.4" Pen="{StaticResource Icon.Pen.WarningDashed}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!-- 状态图标只表示状态，不表示原因 -->
+    <DrawingImage x:Key="Icon.StateRunning">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 12,8.8 A 3.2,3.2 0 1 1 11.99,8.8 Z" Pen="{StaticResource Icon.Pen.Brand}" />
+                <GeometryDrawing Geometry="M 12,5.6 A 6.4,6.4 0 0 1 16.5,7.5" Pen="{StaticResource Icon.Pen.Brand}" />
+                <GeometryDrawing Geometry="M 12,18.4 A 6.4,6.4 0 0 1 7.5,16.5" Pen="{StaticResource Icon.Pen.Brand}" />
+                <GeometryDrawing Geometry="M 12,10.5 A 1.5,1.5 0 1 1 11.99,10.5 Z" Brush="{StaticResource Icon.Brush.Brand}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.StateStopped">
+        <DrawingImage.Drawing>
+            <GeometryDrawing Geometry="M 5,5 L 19,5 L 19,19 L 5,19 Z" Pen="{StaticResource Icon.Pen.Ink}" />
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <DrawingImage x:Key="Icon.StateFailed">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="M 12,4.2 L 21.5,20 L 2.5,20 Z" Pen="{StaticResource Icon.Pen.Danger}" />
+                <GeometryDrawing Geometry="M 12,10 L 12,14.2" Pen="{StaticResource Icon.Pen.Danger}" />
+                <GeometryDrawing Geometry="M 12,15.95 A 1.25,1.25 0 1 1 11.99,15.95 Z" Brush="{StaticResource Icon.Brush.Danger}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!-- 图标显示尺寸。规格要求 16 px 起可用，因此最小档不低于 16。 -->
+    <sys:Double x:Key="Icon.Size.Sm">16</sys:Double>
+    <sys:Double x:Key="Icon.Size.Md">20</sys:Double>
+    <sys:Double x:Key="Icon.Size.Lg">32</sys:Double>
+    <sys:Double x:Key="Icon.Size.Xl">64</sys:Double>
+</ResourceDictionary>

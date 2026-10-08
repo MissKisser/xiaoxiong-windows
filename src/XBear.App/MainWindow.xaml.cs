@@ -45,6 +45,39 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
+    /// 删除选中实例。删除是高影响操作且数据不可回退，先二次确认再执行。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">事件参数。</param>
+    private async void OnDeleteInstance(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ViewModels.MainViewModel viewModel ||
+            viewModel.Selected is null)
+        {
+            return;
+        }
+
+        string name = viewModel.Selected.DisplayName;
+
+        MessageBoxResult answer = MessageBox.Show(
+            this,
+            $"将删除实例「{name}」及其本地数据。该操作不可撤销。",
+            "确认删除",
+            MessageBoxButton.OKCancel,
+            MessageBoxImage.Warning);
+
+        if (answer != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        AppServices services = ((App)Application.Current).Services;
+
+        await services.Repository.DeleteAsync(viewModel.Selected.Id).ConfigureAwait(true);
+        await viewModel.RefreshAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>
     /// 选择诊断包输出目录。目录由用户在系统对话框中指定。
     /// </summary>
     /// <param name="sender">事件源。</param>

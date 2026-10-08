@@ -109,7 +109,8 @@ public interface ISchemaEvaluator
 }
 
 /// <summary>
-/// 实例配置与镜像清单的 Schema 校验入口。
+/// 实例配置、镜像清单与快照元数据的 Schema 校验入口，
+/// 并对没有配套 Schema 文件的版本契约与性能基线做结构校验。
 /// 校验结果为结构化对象，便于测试与上层逐条展示。
 /// </summary>
 public sealed class SpecValidator
@@ -166,6 +167,168 @@ public sealed class SpecValidator
         ValidateAgainst(SpecLoader.TerminologySchemaFileName, json);
 
     /// <summary>
+    /// 校验快照元数据 JSON。
+    /// </summary>
+    /// <param name="json">快照元数据 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateSnapshot(string json) =>
+        ValidateAgainst(SpecLoader.SnapshotSchemaFileName, json);
+
+    /// <summary>
+    /// 校验版本契约 JSON。版本契约未配套 Schema 文件，
+    /// 此处按强类型模型核对必填段落与版本号形态。
+    /// </summary>
+    /// <param name="json">版本契约 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateVersion(string json)
+    {
+        var errors = new List<ValidationError>();
+        var document = _loader.ParseVersion(json);
+
+        RequireText(errors, "/product/id", document.Product.Id, "产品标识");
+        RequireText(errors, "/product/nameZh", document.Product.NameZh, "产品中文名");
+        RequireText(errors, "/product/nameEn", document.Product.NameEn, "产品英文名");
+        RequireSemanticVersion(errors, "/product/version", document.Product.Version);
+
+        RequireSemanticVersion(errors, "/spec/version", document.Spec.Version);
+        RequireText(errors, "/spec/description", document.Spec.Description, "规格层版本说明");
+
+        RequireText(errors, "/terminology/versionField", document.Terminology.VersionField, "术语表版本字段位置");
+        RequireText(errors, "/terminology/rule", document.Terminology.Rule, "术语表递增规则");
+
+        RequireText(errors, "/build/idFormat", document.Build.IdFormat, "构建标识模板");
+        if (document.Build.Fields.Count == 0)
+        {
+            errors.Add(new ValidationError("/build/fields", "构建标识未声明任何字段来源", "/build/fields"));
+        }
+
+        if (document.Rules.Count == 0)
+        {
+            errors.Add(new ValidationError("/rules", "版本契约未声明任何递增规则", "/rules"));
+        }
+
+        for (var i = 0; i < document.Rules.Count; i++)
+        {
+            var path = $"/rules/{i}";
+            var rule = document.Rules[i];
+
+            if (!VersionBumpRules.IsKnownLevel(rule.Level))
+            {
+                errors.Add(new ValidationError(
+                    $"{path}/level",
+                    $"递增级别 {rule.Level} 不属于已定义级别",
+                    $"{path}/level"));
+            }
+
+            RequireText(errors, $"{path}/when", rule.When, "递增规则触发条件");
+
+            if (rule.Effects.Count == 0)
+            {
+                errors.Add(new ValidationError($"{path}/effects", "递增规则未声明两端动作", $"{path}/effects"));
+            }
+        }
+
+        RequireText(errors, "/consistency/note", document.Consistency.Note, "版本序列独立性说明");
+        RequireText(errors, "/consistency/driftPolicy", document.Consistency.DriftPolicy, "版本防漂移策略");
+        RequireText(
+            errors,
+            "/consistency/schemaCompatibility",
+            document.Consistency.SchemaCompatibility,
+            "规格层版本兼容性说明");
+
+        return new ValidationResult(SpecLoader.VersionFileName, errors);
+    }
+
+    /// <summary>
+    /// 校验性能基线 JSON。性能基线未配套 Schema 文件，
+    /// 此处按强类型模型核对指标定义、门限运算符与单位声明的一致性。
+    /// </summary>
+    /// <param name="json">性能基线 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateBaseline(string json)
+    {
+        var errors = new List<ValidationError>();
+        var baseline = _loader.ParseBaseline(json);
+        var density = baseline.Density;
+
+        RequireSemanticVersion(errors, "/version", baseline.Version);
+        RequireText(errors, "/status", baseline.Status, "基线状态");
+        RequireText(errors, "/statusNote", baseline.StatusNote, "基线状态说明");
+
+        foreach (var kind in baseline.Units.Kinds())
+        {
+            RequireText(errors, $"/units/{kind.Name}", kind.Symbol, "单位符号");
+        }
+
+        if (baseline.Metrics.Count == 0)
+        {
+            errors.Add(new ValidationError("/metrics", "性能基线未声明任何指标", "/metrics"));
+        }
+
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < baseline.Metrics.Count; i++)
+        {
+            var metric = baseline.Metrics[i];
+            var path = $"/metrics/{i}";
+
+            if (string.IsNullOrWhiteSpace(metric.Id))
+            {
+                errors.Add(new ValidationError($"{path}/id", "指标标识不能为空", $"{path}/id"));
+            }
+            else if (!seenIds.Add(metric.Id))
+            {
+                errors.Add(new ValidationError(
+                    $"{path}/id",
+                    $"指标标识 {metric.Id} 重复",
+                    $"{path}/id"));
+            }
+
+            RequireText(errors, $"{path}/name", metric.Name, "指标名称");
+            RequireText(errors, $"{path}/measure", metric.Measure, "指标测量口径");
+            RequireText(errors, $"{path}/owner", metric.Owner, "指标负责端");
+            RequireThreshold(errors, $"{path}/target", metric.Target, baseline.Units);
+        }
+
+        if (density.Profiles.Count == 0)
+        {
+            errors.Add(new ValidationError("/density/profiles", "性能基线未声明任何密度档位", "/density/profiles"));
+        }
+
+        for (var i = 0; i < density.Profiles.Count; i++)
+        {
+            var profile = density.Profiles[i];
+            var path = $"/density/profiles/{i}";
+
+            RequireText(errors, $"{path}/tier", profile.Tier, "密度档位名");
+
+            if (profile.HostMemoryGB <= 0)
+            {
+                errors.Add(new ValidationError(
+                    $"{path}/hostMemoryGB",
+                    "密度档位必须绑定正的宿主内存容量",
+                    $"{path}/hostMemoryGB"));
+            }
+
+            RequireThreshold(errors, $"{path}/targetInstances", profile.TargetInstances, baseline.Units);
+        }
+
+        if (density.Regression.MaxDegradationPercent <= 0)
+        {
+            errors.Add(new ValidationError(
+                "/density/regression/maxDegradationPercent",
+                "并行数达标的附加条件必须给出正的劣化上限",
+                "/density/regression/maxDegradationPercent"));
+        }
+
+        if (baseline.FillPolicy.Count == 0)
+        {
+            errors.Add(new ValidationError("/fillPolicy", "性能基线未声明实测值回填规则", "/fillPolicy"));
+        }
+
+        return new ValidationResult(SpecLoader.BaselineFileName, errors);
+    }
+
+    /// <summary>
     /// 校验样例文件，先做 Schema 校验再解析为强类型模型。
     /// </summary>
     /// <param name="fixtureFileName">样例文件名。</param>
@@ -173,9 +336,7 @@ public sealed class SpecValidator
     public ValidationResult ValidateFixture(string fixtureFileName)
     {
         var json = _loader.ReadFixtureText(fixtureFileName);
-        var schemaFileName = fixtureFileName.StartsWith("image", StringComparison.Ordinal)
-            ? SpecLoader.ImageSchemaFileName
-            : SpecLoader.InstanceSchemaFileName;
+        var schemaFileName = FixtureSchemaFileName(fixtureFileName);
 
         var result = ValidateAgainst(schemaFileName, json);
         if (result.IsValid)
@@ -184,6 +345,10 @@ public sealed class SpecValidator
             if (schemaFileName == SpecLoader.ImageSchemaFileName)
             {
                 _loader.ParseImage(json);
+            }
+            else if (schemaFileName == SpecLoader.SnapshotSchemaFileName)
+            {
+                _loader.ParseSnapshot(json);
             }
             else
             {
@@ -205,6 +370,72 @@ public sealed class SpecValidator
         var schemaJson = _loader.ReadSchemaText(schemaFileName);
         var errors = _evaluator.Evaluate(schemaJson, json, schemaFileName);
         return new ValidationResult(schemaFileName, errors);
+    }
+
+    /// <summary>
+    /// 按样例文件名判定其所属的契约 Schema。
+    /// </summary>
+    /// <param name="fixtureFileName">样例文件名。</param>
+    /// <returns>该样例对应的 Schema 文件名。</returns>
+    private static string FixtureSchemaFileName(string fixtureFileName)
+    {
+        if (fixtureFileName.StartsWith("image", StringComparison.Ordinal))
+        {
+            return SpecLoader.ImageSchemaFileName;
+        }
+
+        return fixtureFileName.StartsWith("snapshot", StringComparison.Ordinal)
+            ? SpecLoader.SnapshotSchemaFileName
+            : SpecLoader.InstanceSchemaFileName;
+    }
+
+    private static void RequireText(
+        List<ValidationError> errors,
+        string path,
+        string? value,
+        string what)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            errors.Add(new ValidationError(path, $"{what}不能为空", path));
+        }
+    }
+
+    private static void RequireSemanticVersion(
+        List<ValidationError> errors,
+        string path,
+        string? value)
+    {
+        if (!SemanticVersion.TryParse(value, out _))
+        {
+            errors.Add(new ValidationError(
+                path,
+                $"版本号 {value ?? "（空）"} 不是三段式语义版本",
+                path));
+        }
+    }
+
+    private static void RequireThreshold(
+        List<ValidationError> errors,
+        string path,
+        BaselineThreshold threshold,
+        BaselineUnits units)
+    {
+        if (!threshold.HasKnownOperator())
+        {
+            errors.Add(new ValidationError(
+                $"{path}/op",
+                $"比较运算符 {threshold.Op} 不属于已定义运算符",
+                $"{path}/op"));
+        }
+
+        if (threshold.Unit is { } unit && !units.ContainsSymbol(unit))
+        {
+            errors.Add(new ValidationError(
+                $"{path}/unit",
+                $"单位符号 {unit} 未在单位表中声明",
+                $"{path}/unit"));
+        }
     }
 }
 

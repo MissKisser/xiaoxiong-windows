@@ -15,6 +15,7 @@ public class ContractSelfCheckTests
         {
             SpecLoader.InstanceSchemaFileName,
             SpecLoader.ImageSchemaFileName,
+            SpecLoader.SnapshotSchemaFileName,
             SpecLoader.TerminologySchemaFileName
         };
 
@@ -71,6 +72,183 @@ public class ContractSelfCheckTests
     }
 
     [Fact]
+    public void SnapshotSchemaRejectsUnknownTopLevelFields()
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.SnapshotSchemaFileName))!
+            .AsObject();
+
+        Assert.False(schema["additionalProperties"]!.GetValue<bool>());
+    }
+
+    /// <summary>快照契约声明的必填字段。</summary>
+    public static TheoryData<string> SnapshotRequiredFields =>
+        new()
+        {
+            "schemaVersion",
+            "id",
+            "instanceRef",
+            "imageRef",
+            "createdAt",
+            "state"
+        };
+
+    /// <summary>快照模型必须绑定的全部契约字段。</summary>
+    public static TheoryData<string> SnapshotFieldNames =>
+        new()
+        {
+            "schemaVersion",
+            "id",
+            "displayName",
+            "instanceRef",
+            "imageRef",
+            "createdAt",
+            "state",
+            "parentRef",
+            "note",
+            "platformConfig"
+        };
+
+    [Theory]
+    [MemberData(nameof(SnapshotRequiredFields))]
+    public void SnapshotModelBindsEveryRequiredField(string fieldName)
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.SnapshotSchemaFileName))!
+            .AsObject();
+
+        Assert.True(
+            schema["required"]!.AsArray().Any(node => node!.GetValue<string>() == fieldName),
+            $"快照契约未把 {fieldName} 列为必填");
+
+        Assert.NotNull(typeof(SnapshotSpec).GetProperty(PropertyName(fieldName)));
+    }
+
+    [Theory]
+    [MemberData(nameof(SnapshotFieldNames))]
+    public void SnapshotModelBindsEveryDeclaredField(string fieldName)
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.SnapshotSchemaFileName))!
+            .AsObject();
+
+        Assert.True(
+            schema["properties"]!.AsObject().ContainsKey(fieldName),
+            $"快照契约声明了 {fieldName} 但强类型模型未覆盖");
+
+        var property = typeof(SnapshotSpec).GetProperty(PropertyName(fieldName));
+
+        Assert.NotNull(property);
+
+        var attribute = property!.GetCustomAttributes(typeof(JsonPropertyNameAttribute), false)
+            .Cast<JsonPropertyNameAttribute>()
+            .Single();
+
+        Assert.Equal(fieldName, attribute.Name);
+    }
+
+    [Fact]
+    public void SnapshotFixturesPassSchema()
+    {
+        foreach (var fixture in new[]
+                 {
+                     SpecLoader.SnapshotMinimalFixtureName,
+                     SpecLoader.SnapshotFullFixtureName
+                 })
+        {
+            var result = SpecTestHost.Validator.ValidateSnapshot(
+                SpecTestHost.Loader.ReadFixtureText(fixture));
+
+            Assert.True(result.IsValid, $"{fixture}：{result.DescribeErrors()}");
+        }
+    }
+
+    [Fact]
+    public void MinimalSnapshotFixtureDeclaresOnlyRequiredFields()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.SnapshotMinimalJson())!.AsObject();
+
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.SnapshotSchemaFileName))!
+            .AsObject();
+        var required = schema["required"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+
+        foreach (var fieldName in required)
+        {
+            Assert.True(sample.ContainsKey(fieldName), $"最小快照样例缺少必填字段 {fieldName}");
+        }
+
+        Assert.Equal(required.Length, sample.Count);
+    }
+
+    [Fact]
+    public void SnapshotSchemaVersionIsComparableSemver()
+    {
+        var spec = SpecTestHost.Loader.ParseSnapshot(SpecTestHost.SnapshotFullJson());
+
+        Assert.True(SemanticVersion.TryParse(spec.SchemaVersion, out _), spec.SchemaVersion);
+    }
+
+    [Fact]
+    public void VersionFileExposesBothVersionSequences()
+    {
+        var document = SpecTestHost.Loader.LoadVersion();
+
+        Assert.True(SemanticVersion.TryParse(document.Product.Version, out _));
+        Assert.True(SemanticVersion.TryParse(document.Spec.Version, out _));
+        Assert.NotEqual(VersionSequence.Product, VersionSequence.Spec);
+        Assert.True(
+            VersionSequence.Product != VersionSequence.Spec,
+            "产品版本与规格版本必须是两个互不推导的序列");
+        Assert.NotEmpty(document.Rules);
+    }
+
+    [Fact]
+    public void VersionFileKeepsProductAndSpecVersionsIndependent()
+    {
+        var document = SpecTestHost.Loader.LoadVersion();
+
+        var spec = document.ParseSpecVersion();
+        var product = document.ParseProductVersion();
+
+        var specNext = spec.Next(VersionBumpLevel.Minor);
+
+        Assert.NotEqual(spec, specNext);
+        Assert.True(
+            product == document.ParseProductVersion(),
+            "递增规格层版本不得带动产品版本");
+    }
+
+    [Fact]
+    public void BaselineSeparatesTargetsFromMeasuredValues()
+    {
+        var baseline = SpecTestHost.Loader.LoadBaseline();
+
+        Assert.NotEmpty(baseline.Metrics);
+        Assert.All(baseline.Metrics, m =>
+        {
+            Assert.True(m.Target.HasKnownOperator());
+            Assert.Null(m.Measured);
+        });
+        Assert.NotEmpty(baseline.FillPolicy);
+    }
+
+    [Fact]
+    public void BaselineMetricUnitsComeFromTheDeclaredUnitTable()
+    {
+        var baseline = SpecTestHost.Loader.LoadBaseline();
+
+        foreach (var metric in baseline.Metrics)
+        {
+            Assert.NotNull(metric.Target.Unit);
+            Assert.True(baseline.Units.ContainsSymbol(metric.Target.Unit!));
+        }
+    }
+
+    private static string PropertyName(string fieldName) =>
+        char.ToUpperInvariant(fieldName[0]) + fieldName[1..];
+
+    [Fact]
     public void WindowsInstanceFixturePassesSchema()
     {
         var result = SpecTestHost.Validator.ValidateInstance(SpecTestHost.WindowsInstanceJson());
@@ -123,9 +301,19 @@ public class ContractSelfCheckTests
     }
 
     [Fact]
-    public void TerminologyContainsEightTerms()
+    public void TerminologyIsNonEmptyAndIdsAreUnique()
     {
-        Assert.Equal(8, SpecTestHost.Terminology().Terms.Count);
+        var document = SpecTestHost.Terminology();
+        var declared = JsonNode.Parse(SpecTestHost.Loader.ReadText(
+            Path.Combine(SpecTestHost.Loader.SpecRoot, SpecLoader.TerminologyFileName)))!;
+
+        var ids = document.Terms.Select(t => t.Id).ToArray();
+
+        Assert.NotEmpty(ids);
+        Assert.True(
+            declared["terms"]!.AsArray().Count == ids.Length,
+            "加载后的术语条目数应与术语表文件声明的条目数一致");
+        Assert.Equal(ids.Length, ids.Distinct(StringComparer.Ordinal).Count());
     }
 
     [Fact]

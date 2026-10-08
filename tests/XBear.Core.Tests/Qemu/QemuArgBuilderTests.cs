@@ -40,12 +40,41 @@ public sealed class QemuArgBuilderTests
         });
     }
 
+    private static void SetIdentity(
+        InstanceSpec spec,
+        string? serialNo = "XBSN0123456789AB",
+        string? androidId = "a3f9c2e17b8d4056",
+        string? imei = "861234567890123")
+    {
+        spec.DeviceIdentity = new DeviceIdentity
+        {
+            SerialNo = serialNo,
+            AndroidId = androidId,
+            Imei = imei,
+        };
+    }
+
+    /// <summary>构造仅携带指定 P2 系统可写实测结论的镜像清单。</summary>
+    private static ImageSpec CreateImage(VerificationState systemWrite)
+        => new()
+        {
+            Id = "bliss-os-17-x86_64",
+            Verified = new ImageVerification { Fidelity = new FidelitySet { P2SystemWrite = systemWrite } },
+        };
+
     private static string ReadValue(IReadOnlyList<string> arguments, string flag)
     {
         var index = arguments.ToList().IndexOf(flag);
         Assert.True(index >= 0, $"参数中缺少 {flag}：{string.Join(" ", arguments)}");
         Assert.True(index + 1 < arguments.Count, $"{flag} 之后缺少取值。");
         return arguments[index + 1];
+    }
+
+    /// <summary>取内核引导命令行，未下发该参数时返回 null。</summary>
+    private static string? ReadKernelCommandLine(IReadOnlyList<string> arguments)
+    {
+        var index = arguments.ToList().IndexOf("-append");
+        return index < 0 ? null : arguments[index + 1];
     }
 
     private static string ReadNetDev(IReadOnlyList<string> arguments) => ReadValue(arguments, "-netdev");
@@ -521,5 +550,282 @@ public sealed class QemuArgBuilderTests
 
         Assert.Equal("none", ReadValue(arguments, "-display"));
         Assert.Contains("-vnc", arguments);
+    }
+
+    [Fact]
+    public void 实例声明cpuModel时透传给cpu参数()
+    {
+        var spec = CreateSpec();
+        spec.Resources.CpuModel = "qemu64";
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal("qemu64", ReadValue(arguments, "-cpu"));
+    }
+
+    [Fact]
+    public void 未声明cpuModel时回退到宿主cpu直通()
+    {
+        var spec = CreateSpec();
+        spec.Resources.CpuModel = null;
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(QemuArgBuilder.DefaultCpuModel, ReadValue(arguments, "-cpu"));
+        Assert.Equal("host", ReadValue(arguments, "-cpu"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void 空白cpuModel回退到宿主cpu直通(string cpuModel)
+    {
+        var spec = CreateSpec();
+        spec.Resources.CpuModel = cpuModel;
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(QemuArgBuilder.DefaultCpuModel, ReadValue(arguments, "-cpu"));
+    }
+
+    [Fact]
+    public void cpuModel两侧空白被裁剪后下发()
+    {
+        var spec = CreateSpec();
+        spec.Resources.CpuModel = "  max  ";
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal("max", ReadValue(arguments, "-cpu"));
+    }
+
+    /// <summary>CPU 型号允许带 QEMU 的特性开关后缀，取型号与开关用逗号连接。</summary>
+    [Fact]
+    public void cpuModel保留型号与特性开关的组合写法()
+    {
+        var spec = CreateSpec();
+        spec.Resources.CpuModel = "qemu64,+ssse3";
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal("qemu64,+ssse3", ReadValue(arguments, "-cpu"));
+    }
+
+    /// <summary>
+    /// 回归测试：型号一旦掺入空白或引号就会被命令行解析拆成额外参数，
+    /// 必须在生成阶段拒绝，避免出现实际生效的 cpu 参数并非实例声明值的情况。
+    /// </summary>
+    [Theory]
+    [InlineData("host -enable-kvm")]
+    [InlineData("host\"")]
+    [InlineData("host;rm")]
+    public void cpuModel含非法字符时抛出规格错误(string cpuModel)
+    {
+        var spec = CreateSpec();
+        spec.Resources.CpuModel = cpuModel;
+
+        var exception = Assert.Throws<XBearException>(() =>
+            CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900)));
+
+        Assert.Equal(ErrorCategory.Spec, exception.Category);
+        Assert.False(string.IsNullOrWhiteSpace(exception.Remediation));
+    }
+
+    [Fact]
+    public void 携带设备标识时下发内核引导命令行()
+    {
+        var spec = CreateSpec();
+        SetIdentity(spec);
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(
+            "androidboot.serialno=XBSN0123456789AB"
+            + " androidboot.android_id=a3f9c2e17b8d4056"
+            + " androidboot.imei=861234567890123",
+            ReadKernelCommandLine(arguments));
+    }
+
+    [Fact]
+    public void 仅有序列号时只下发序列号片段()
+    {
+        var spec = CreateSpec();
+        SetIdentity(spec, androidId: null, imei: null);
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(
+            "androidboot.serialno=XBSN0123456789AB",
+            ReadKernelCommandLine(arguments));
+    }
+
+    [Fact]
+    public void 标识字段全空时不生成引导命令行()
+    {
+        var spec = CreateSpec();
+        SetIdentity(spec, serialNo: null, androidId: null, imei: null);
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Null(ReadKernelCommandLine(arguments));
+    }
+
+    [Fact]
+    public void 标识含非法字符时抛出规格错误()
+    {
+        var spec = CreateSpec();
+        SetIdentity(spec, serialNo: "XBSN 0001");
+
+        var exception = Assert.Throws<XBearException>(() =>
+            CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900)));
+
+        Assert.Equal(ErrorCategory.Spec, exception.Category);
+    }
+
+    /// <summary>
+    /// 向后兼容：不携带标识、镜像保真度未实测的实例不得多出任何参数。
+    /// 整条参数序列与引入引导参数之前的形态逐项对齐，防止旧实例升级后行为漂移。
+    /// </summary>
+    [Fact]
+    public void 黄金向量_无标识且保真度未实测时参数序列与引入引导参数前一致()
+    {
+        var arguments = CreateBuilder().BuildStartArguments(CreateSpec(), DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(
+            new[]
+            {
+                "-accel",
+                "whpx",
+                "-cpu",
+                "host",
+                "-smp",
+                "4",
+                "-m",
+                "4096",
+                "-drive",
+                @"file=D:\xbear\instance-1\overlay.qcow2,if=virtio,format=qcow2",
+                "-boot",
+                "menu=off",
+                "-no-reboot",
+                "-display",
+                "none",
+                "-qmp",
+                "tcp:127.0.0.1:5556,server=on,wait=off",
+                "-vnc",
+                "127.0.0.1:0",
+                "-netdev",
+                "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+                "-device",
+                "virtio-net-pci,netdev=net0",
+                "-device",
+                "virtio-gpu-pci",
+                "-device",
+                "virtio-keyboard-pci",
+                "-device",
+                "virtio-mouse-pci",
+                "-device",
+                "virtio-tablet-pci",
+            },
+            arguments);
+        Assert.DoesNotContain("-append", arguments);
+    }
+
+    [Fact]
+    public void 未提供镜像清单时不追加可写引导参数()
+    {
+        var arguments = CreateBuilder()
+            .BuildStartArguments(CreateSpec(), image: null, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Null(ReadKernelCommandLine(arguments));
+    }
+
+    [Fact]
+    public void 镜像声明系统可写时追加可写引导参数()
+    {
+        var arguments = CreateBuilder()
+            .BuildStartArguments(
+                CreateSpec(),
+                CreateImage(VerificationState.Pass),
+                DiskPath,
+                new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal("androidboot.writable_system=1", ReadKernelCommandLine(arguments));
+    }
+
+    /// <summary>
+    /// 回归测试：未实测不得臆测为可写，臆测会让系统把只读 system 分区按可写挂载并写坏镜像。
+    /// </summary>
+    [Theory]
+    [InlineData(VerificationState.Untested)]
+    [InlineData(VerificationState.Fail)]
+    public void 系统可写未实测或实测失败时不追加可写引导参数(VerificationState state)
+    {
+        var arguments = CreateBuilder()
+            .BuildStartArguments(CreateSpec(), CreateImage(state), DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Null(ReadKernelCommandLine(arguments));
+    }
+
+    [Fact]
+    public void 镜像未提供保真度结论时不追加可写引导参数()
+    {
+        var image = new ImageSpec { Id = "bliss-os-17-x86_64", Verified = new ImageVerification() };
+
+        var arguments = CreateBuilder()
+            .BuildStartArguments(CreateSpec(), image, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Null(ReadKernelCommandLine(arguments));
+    }
+
+    [Fact]
+    public void 标识与可写开关共存于同一条引导命令行()
+    {
+        var spec = CreateSpec();
+        SetIdentity(spec, androidId: null, imei: null);
+
+        var arguments = CreateBuilder()
+            .BuildStartArguments(spec, CreateImage(VerificationState.Pass), DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        Assert.Equal(
+            "androidboot.serialno=XBSN0123456789AB androidboot.writable_system=1",
+            ReadKernelCommandLine(arguments));
+    }
+
+    [Fact]
+    public void 黄金向量_cpuModel与引导参数同时生效()
+    {
+        var spec = CreateSpec("lan");
+        spec.Resources.CpuModel = "qemu64";
+        SetIdentity(spec);
+
+        var arguments = CreateBuilder()
+            .BuildStartArguments(spec, CreateImage(VerificationState.Pass), DiskPath, new AllocatedPorts(15555, 15556, 5901));
+
+        Assert.Equal("qemu64", ReadValue(arguments, "-cpu"));
+        Assert.Equal(
+            "androidboot.serialno=XBSN0123456789AB"
+            + " androidboot.android_id=a3f9c2e17b8d4056"
+            + " androidboot.imei=861234567890123"
+            + " androidboot.writable_system=1",
+            ReadKernelCommandLine(arguments));
+        Assert.Equal("0.0.0.0:1", ReadValue(arguments, "-vnc"));
+        Assert.Equal(
+            "user,id=net0,hostfwd=tcp:0.0.0.0:15555-:5555",
+            ReadNetDev(arguments));
+    }
+
+    [Fact]
+    public void 引导参数生成是纯函数可重复调用()
+    {
+        var spec = CreateSpec();
+        SetIdentity(spec);
+        var builder = CreateBuilder();
+        var image = CreateImage(VerificationState.Pass);
+        var ports = new AllocatedPorts(5555, 5556, 5900);
+
+        var first = builder.BuildStartArguments(spec, image, DiskPath, ports);
+        var second = builder.BuildStartArguments(spec, image, DiskPath, ports);
+
+        Assert.Equal(first, second);
     }
 }

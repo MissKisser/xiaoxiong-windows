@@ -46,12 +46,14 @@ public sealed partial class MainViewModel : ObservableObject
     /// <param name="images">镜像清单，按标识索引。</param>
     /// <param name="diagnostics">诊断包导出器。</param>
     /// <param name="terms">界面文案术语来源。</param>
+    /// <param name="version">版本契约文档，为空时从诊断包导出器获取。</param>
     public MainViewModel(
         IInstanceRepository repository,
         InstanceManager? manager,
         IReadOnlyDictionary<string, ImageSpec> images,
         DiagnosticsExporter diagnostics,
-        TerminologyCatalog terms)
+        TerminologyCatalog terms,
+        VersionDocument? version = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(images);
@@ -64,6 +66,13 @@ public sealed partial class MainViewModel : ObservableObject
         _diagnostics = diagnostics;
         _terms = terms;
 
+        VersionDocument versionDoc = version ?? diagnostics.Version;
+        ProductVersion = versionDoc.Product.Version;
+        SpecVersion = versionDoc.Spec.Version;
+        BuildId = version is not null
+            ? versionDoc.FormatBuildId(DiagnosticsExporter.ResolveCommitShort())
+            : diagnostics.BuildId;
+
         _riskBannerText = string.Empty;
         _detailText = string.Empty;
 
@@ -71,6 +80,32 @@ public sealed partial class MainViewModel : ObservableObject
         {
             _manager.StateChanged += OnManagerStateChanged;
         }
+    }
+
+    /// <summary>产品版本，来自版本契约，禁止硬编码。</summary>
+    public string ProductVersion { get; }
+
+    /// <summary>规格版本，来自版本契约，禁止硬编码。</summary>
+    public string SpecVersion { get; }
+
+    /// <summary>构建标识，由产品版本与提交短哈希拼装而成。</summary>
+    public string BuildId { get; }
+
+    /// <summary>打开关于窗口的回调动作，供界面或测试接管。</summary>
+    public Action? ShowAboutAction { get; set; }
+
+    /// <summary>打开关于窗口命令。</summary>
+    [RelayCommand]
+    public void OpenAbout()
+    {
+        if (ShowAboutAction is not null)
+        {
+            ShowAboutAction();
+            return;
+        }
+
+        var window = new Views.AboutWindow(this);
+        window.ShowDialog();
     }
 
     /// <summary>全部实例。</summary>
@@ -101,7 +136,7 @@ public sealed partial class MainViewModel : ObservableObject
     public string CreateInstanceText => $"创建{_terms.Instance}";
 
     /// <summary>导出诊断包按钮文案。</summary>
-    public string ExportDiagnosticsText => "导出诊断包";
+    public string ExportDiagnosticsText => $"导出{_terms.Diagnostics}";
 
     /// <summary>清除错误按钮文案。</summary>
     public string DismissErrorText => "知道了";
@@ -129,6 +164,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>保真度区标题文案。</summary>
     public string FidelityTitle => $"{_terms.Fidelity}（逐条实测）";
+
+    /// <summary>实例详情区标题文案，取自术语表。</summary>
+    public string DetailTitle => $"{_terms.Instance}详情";
 
     /// <summary>输入通道区标题文案。</summary>
     public string InputChannelTitle => $"{_terms.InputChannel}状态";
@@ -409,10 +447,12 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     private void RefreshInputChannel()
     {
-        InputChannelPresentation presentation = InputChannelMapper.Describe(new InputProbeResult(
-            _inputChannel.Channel,
-            _inputChannel.NativeFailure,
-            _inputChannel.ProjectionFailure));
+        InputChannelPresentation presentation = InputChannelMapper.Describe(
+            new InputProbeResult(
+                _inputChannel.Channel,
+                _inputChannel.NativeFailure,
+                _inputChannel.ProjectionFailure),
+            _terms);
 
         InputChannelText = presentation.Label;
         InputChannelDetail = presentation.Detail;
@@ -479,13 +519,14 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// 统一呈现 <see cref="XBearException"/>：分类中文说明加处置建议，不暴露堆栈。
+    /// 统一呈现 <see cref="XBearException"/>：标准四层分类名加处置建议，不暴露堆栈。
+    /// 技术分类与详情保留在 <see cref="ErrorCategoryText"/> 中，供诊断展开对照。
     /// </summary>
     /// <param name="ex">待呈现的异常。</param>
     /// <returns>已呈现时返回 true，供调用方用作异常筛选条件。</returns>
     private bool Present(Exception ex)
     {
-        (Presentation.ErrorCategoryText text, string? remediation) = ErrorPresenter.Describe(ex);
+        (Presentation.ErrorCategoryText text, string? remediation) = ErrorPresenter.Describe(ex, _terms);
 
         ErrorTitle = text.Title;
         ErrorMessage = ex.Message;

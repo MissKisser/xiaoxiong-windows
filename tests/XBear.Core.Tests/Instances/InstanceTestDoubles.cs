@@ -1,5 +1,6 @@
 using XBear.Core.Abstractions;
 using XBear.Core.Diagnostics;
+using XBear.Core.Instances;
 using XBear.Core.Spec;
 
 namespace XBear.Core.Tests.Instances;
@@ -120,6 +121,15 @@ internal sealed class FakeQemuProcessHandle : QemuProcessHandle
 
     /// <summary>停止时抛出。</summary>
     public Exception? StopFailure { get; set; }
+
+    /// <summary>工作集内存提供者，供测试模拟采样。</summary>
+    public Func<long?>? WorkingSetProvider { get; set; }
+
+    /// <summary>固定工作集内存数值，供测试模拟采样。</summary>
+    public long? FakeWorkingSet { get; set; }
+
+    /// <inheritdoc />
+    public long? GetWorkingSetBytes() => WorkingSetProvider?.Invoke() ?? FakeWorkingSet;
 
     /// <summary>
     /// 记录一次停止调用。
@@ -294,4 +304,29 @@ internal sealed class InMemoryInstanceRepository : IInstanceRepository
     /// <param name="id">实例标识。</param>
     /// <returns>false。</returns>
     public Task<bool> IsTombstonedAsync(string id) => Task.FromResult(false);
+}
+
+/// <summary>假时间源，供测试精确推进时钟。</summary>
+internal sealed class FakeTimeProvider : TimeProvider
+{
+    private DateTimeOffset _now = new(2026, 10, 8, 12, 0, 0, TimeSpan.Zero);
+
+    public override DateTimeOffset GetUtcNow() => _now;
+
+    public void Advance(TimeSpan delta) => _now += delta;
+
+    public void SetUtcNow(DateTimeOffset time) => _now = time;
+}
+
+/// <summary>假宿主内存检测器，供测试模拟任意宿主物理内存容量。</summary>
+internal sealed class FakeHostMemoryDetector : IHostMemoryDetector
+{
+    public double MemoryGB { get; set; }
+
+    public FakeHostMemoryDetector(double memoryGB = 16.0)
+    {
+        MemoryGB = memoryGB;
+    }
+
+    public double GetTotalPhysicalMemoryGB() => MemoryGB;
 }

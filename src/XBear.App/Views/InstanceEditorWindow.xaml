@@ -3,75 +3,118 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="{Binding DialogTitle}" Height="640" Width="720"
         WindowStartupLocation="CenterOwner">
-    <ScrollViewer VerticalScrollBarVisibility="Auto">
-        <StackPanel Margin="{DynamicResource Token.Space.Lg}">
-            <TextBlock Style="{StaticResource SectionTitle}" Text="基本信息" />
-            <TextBlock Text="{Binding InstanceTerm}" />
-            <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
-            <TextBlock Text="{Binding ImageTerm}" />
-            <ComboBox ItemsSource="{Binding Images}" SelectedItem="{Binding ImageRef}" />
-
-            <TextBlock Style="{StaticResource SectionTitle}" Text="资源" />
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0">
-                    <TextBlock Text="内存 MB" />
-                    <TextBox Text="{Binding MemoryMB, UpdateSourceTrigger=LostFocus}" />
+    <Border Style="{StaticResource FadeInOnLoad}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="{DynamicResource Token.Space.Xl}">
+                <StackPanel Style="{StaticResource SectionHeader}">
+                    <Image Source="{StaticResource Icon.Instance}" Style="{StaticResource SectionHeaderIcon}" />
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding InstanceTerm}"
+                               Margin="{DynamicResource Space.Margin.BesideIcon}" />
                 </StackPanel>
-                <StackPanel Grid.Column="1">
-                    <TextBlock Text="CPU 核数" />
-                    <TextBox Text="{Binding CpuCores, UpdateSourceTrigger=LostFocus}" />
-                </StackPanel>
-                <StackPanel Grid.Column="2">
-                    <TextBlock Text="磁盘 GB" />
-                    <TextBox Text="{Binding DiskGB, UpdateSourceTrigger=LostFocus}" />
-                </StackPanel>
-            </Grid>
 
-            <TextBlock Style="{StaticResource SectionTitle}" Text="网络" />
-            <TextBlock Text="固定地址" />
-            <TextBox Text="{Binding FixedAddress, UpdateSourceTrigger=PropertyChanged}" />
-            <TextBlock Text="代理" />
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <TextBox Grid.Column="0" Text="{Binding ProxyHost, UpdateSourceTrigger=PropertyChanged}" />
-                <TextBox Grid.Column="1" Text="{Binding ProxyPort, UpdateSourceTrigger=LostFocus}" />
-            </Grid>
+                <TextBlock Text="基本信息" />
+                <TextBlock Text="显示名称" />
+                <TextBox Text="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" />
 
-            <ItemsControl ItemsSource="{Binding PortForwards}">
-                <ItemsControl.ItemTemplate>
-                    <DataTemplate>
-                        <StackPanel Orientation="Horizontal">
-                            <TextBox Width="120" Text="{Binding HostPort, UpdateSourceTrigger=LostFocus}" />
-                            <TextBox Width="120" Text="{Binding GuestPort, UpdateSourceTrigger=LostFocus}" />
-                            <ComboBox Width="120" ItemsSource="{Binding DataContext.Protocols, RelativeSource={RelativeSource AncestorType=Window}}" SelectedItem="{Binding Protocol}" />
+                <StackPanel Style="{StaticResource SectionHeader}">
+                    <Image Source="{StaticResource Icon.Image}" Style="{StaticResource SectionHeaderIcon}" />
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ImageTerm}"
+                               Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                </StackPanel>
+                <ComboBox ItemsSource="{Binding Images}" SelectedItem="{Binding ImageRef}" />
+
+                <StackPanel Style="{StaticResource SectionHeader}">
+                    <Image Source="{StaticResource Icon.MultiInstance}" Style="{StaticResource SectionHeaderIcon}" />
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="资源"
+                               Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                </StackPanel>
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="内存 MB" />
+                            <TextBox Text="{Binding MemoryMB, UpdateSourceTrigger=LostFocus}" />
                         </StackPanel>
-                    </DataTemplate>
-                </ItemsControl.ItemTemplate>
-            </ItemsControl>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="CPU 核数" />
+                            <TextBox Text="{Binding CpuCores, UpdateSourceTrigger=LostFocus}" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="磁盘 GB" />
+                            <TextBox Text="{Binding DiskGB, UpdateSourceTrigger=LostFocus}" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
 
-            <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ExposureTerm}" />
-            <StackPanel>
-                <RadioButton GroupName="Exposure" Content="仅本机（loopback）" IsChecked="{Binding IsLoopbackSelected, Mode=TwoWay}" />
-                <RadioButton GroupName="Exposure" Content="局域网（lan）" IsChecked="{Binding IsLanSelected, Mode=TwoWay}" />
-                <RadioButton GroupName="Exposure" Content="公网（public）" IsChecked="{Binding IsPublicSelected, Mode=TwoWay}" />
+                <!-- 固定地址与投屏入口同属网络呈现，二者共用一处图标分组。 -->
+                <StackPanel Style="{StaticResource SectionHeader}">
+                    <Image Source="{StaticResource Icon.Projection}" Style="{StaticResource SectionHeaderIcon}" />
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="网络"
+                               Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                </StackPanel>
+                <TextBlock Text="固定地址" />
+                <TextBox Text="{Binding FixedAddress, UpdateSourceTrigger=PropertyChanged}" />
+                <TextBlock Text="代理" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" Text="{Binding ProxyHost, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBox Grid.Column="1" Text="{Binding ProxyPort, UpdateSourceTrigger=LostFocus}" />
+                </Grid>
+
+                <!-- 端口映射是宿主与实例之间的文件与协议转发入口。 -->
+                <StackPanel Style="{StaticResource SectionHeader}">
+                    <Image Source="{StaticResource Icon.FileTransfer}" Style="{StaticResource SectionHeaderIcon}" />
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="端口映射"
+                               Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                </StackPanel>
+                <Border Style="{StaticResource Card}">
+                    <ItemsControl ItemsSource="{Binding PortForwards}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Grid.Column="0" Text="{Binding HostPort, UpdateSourceTrigger=LostFocus}" />
+                                    <TextBox Grid.Column="1" Text="{Binding GuestPort, UpdateSourceTrigger=LostFocus}" />
+                                    <ComboBox Grid.Column="2" ItemsSource="{Binding DataContext.Protocols, RelativeSource={RelativeSource AncestorType=Window}}" SelectedItem="{Binding Protocol}" />
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </Border>
+
+                <StackPanel Style="{StaticResource SectionHeader}">
+                    <Image Source="{StaticResource Icon.Exposure}" Style="{StaticResource SectionHeaderIcon}" />
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ExposureTerm}"
+                               Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                </StackPanel>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <RadioButton GroupName="Exposure" Content="仅本机（loopback）" IsChecked="{Binding IsLoopbackSelected, Mode=TwoWay}" />
+                        <RadioButton GroupName="Exposure" Content="局域网（lan）" IsChecked="{Binding IsLanSelected, Mode=TwoWay}" />
+                        <RadioButton GroupName="Exposure" Content="公网（public）" IsChecked="{Binding IsPublicSelected, Mode=TwoWay}" />
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="{Binding ValidationMessage}"
+                           Foreground="{DynamicResource Token.Color.State.Danger}"
+                           TextWrapping="Wrap" />
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="{DynamicResource Space.Margin.Section}">
+                    <Button Content="{Binding CancelText}" Click="OnCancel" />
+                    <Button Content="{Binding ConfirmText}" Click="OnCreate" />
+                </StackPanel>
             </StackPanel>
-
-            <TextBlock Text="{Binding ValidationMessage}"
-                       Foreground="{DynamicResource Token.Color.State.Danger}"
-                       TextWrapping="Wrap" />
-
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="{Binding CancelText}" Click="OnCancel" />
-                <Button Content="{Binding ConfirmText}" Click="OnCreate" />
-            </StackPanel>
-        </StackPanel>
-    </ScrollViewer>
+        </ScrollViewer>
+    </Border>
 </Window>

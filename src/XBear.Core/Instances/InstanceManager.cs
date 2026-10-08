@@ -52,6 +52,8 @@ public sealed class InstanceManager
     private readonly Spec.SpecValidator? _specValidator;
     private readonly Func<IQmpClient> _qmpClientFactory;
     private readonly Func<IAdbClient> _adbClientFactory;
+    private readonly IMetricsRecorder _metricsRecorder;
+    private readonly IDensityAdvisor _densityAdvisor;
 
     private readonly ConcurrentDictionary<string, InstanceState> _states = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AllocatedPorts> _allocatedPorts = new(StringComparer.Ordinal);
@@ -78,6 +80,12 @@ public sealed class InstanceManager
     /// <param name="adbClientFactory">
     /// adb 客户端工厂，缺省时按实例端口新建客户端。
     /// </param>
+    /// <param name="metricsRecorder">
+    /// 指标采集器，缺省时按实例根目录新建采集器。
+    /// </param>
+    /// <param name="densityAdvisor">
+    /// 多开密度顾问，缺省时按系统宿主内存与性能基线契约新建。
+    /// </param>
     public InstanceManager(
         IInstanceRepository repository,
         IPortAllocator portAllocator,
@@ -88,7 +96,9 @@ public sealed class InstanceManager
         string instancesRoot,
         Spec.SpecValidator? specValidator = null,
         Func<IQmpClient>? qmpClientFactory = null,
-        Func<IAdbClient>? adbClientFactory = null)
+        Func<IAdbClient>? adbClientFactory = null,
+        IMetricsRecorder? metricsRecorder = null,
+        IDensityAdvisor? densityAdvisor = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(portAllocator);
@@ -108,7 +118,52 @@ public sealed class InstanceManager
         _specValidator = specValidator;
         _qmpClientFactory = qmpClientFactory ?? (static () => new QmpClient());
         _adbClientFactory = adbClientFactory ?? (static () => new AdbClient());
+        _metricsRecorder = metricsRecorder ?? new MetricsRecorder(instancesRoot);
+        _densityAdvisor = densityAdvisor ?? new InstanceDensityAdvisor();
     }
+
+    /// <summary>指标采集器。</summary>
+    public IMetricsRecorder MetricsRecorder => _metricsRecorder;
+
+    /// <summary>多开密度顾问。</summary>
+    public IDensityAdvisor DensityAdvisor => _densityAdvisor;
+
+    /// <summary>获取实例专属数据目录路径。</summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <returns>数据目录路径。</returns>
+    public string GetInstanceDataDirectory(string instanceId) =>
+        Path.Combine(_instancesRoot, instanceId);
+
+    /// <summary>获取实例 metrics.json 文件绝对路径。</summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <returns>文件绝对路径。</returns>
+    public string GetMetricsFilePath(string instanceId) =>
+        _metricsRecorder.GetMetricsFilePath(instanceId);
+
+    /// <summary>
+    /// 获取当前宿主对应的建议并行实例上限与档位建议。
+    /// </summary>
+    /// <param name="currentCount">当前实例数，若为 null 则以当前运行中实例数计算。</param>
+    /// <param name="instanceTerm">用于提示文案的实例概念中文词，默认“实例”。</param>
+    /// <returns>密度建议信息。</returns>
+    public DensityAdvice GetDensityAdvice(int? currentCount = null, string instanceTerm = "实例")
+    {
+        int count = currentCount ?? _states.Values.Count(s => s == InstanceState.Running);
+        return _densityAdvisor.Evaluate(count, instanceTerm);
+    }
+
+    /// <summary>
+    /// 比对基线延迟与多实例并发实测延迟，评估延迟劣化是否在容许范围内。
+    /// </summary>
+    /// <param name="baselineLatency">单实例基线延迟。</param>
+    /// <param name="measuredLatency">多实例并发实测延迟。</param>
+    /// <param name="regression">指定的劣化上限契约，缺省时从基线配置读取。</param>
+    /// <returns>劣化评估结论。</returns>
+    public RegressionEvaluation EvaluateRegression(
+        double baselineLatency,
+        double measuredLatency,
+        Spec.DensityRegression? regression = null) =>
+        _densityAdvisor.EvaluateRegression(baselineLatency, measuredLatency, regression);
 
     /// <summary>状态变更通知，供界面绑定。</summary>
     public event EventHandler<InstanceStateChangedEventArgs>? StateChanged;
@@ -266,6 +321,7 @@ public sealed class InstanceManager
         }
 
         SetState(instanceId, InstanceState.Starting);
+        _metricsRecorder.OnStarting(instanceId);
 
         AllocatedPorts? allocated = null;
         QemuProcessHandle? handle = null;
@@ -285,9 +341,12 @@ public sealed class InstanceManager
             _handles[instanceId] = handle;
 
             SetState(instanceId, InstanceState.Running);
+            _metricsRecorder.OnRunning(instanceId, handle);
         }
         catch (OperationCanceledException)
         {
+            _metricsRecorder.OnStartupFailed(instanceId);
+
             // 用户主动取消不是故障：同样回收进程与端口，但状态回到已停止，取消异常原样上抛。
             if (handle is not null)
             {
@@ -302,6 +361,8 @@ public sealed class InstanceManager
         }
         catch (Exception ex)
         {
+            _metricsRecorder.OnStartupFailed(instanceId);
+
             // 回收顺序：先杀进程再放端口，避免端口被残留进程继续占用。
             if (handle is not null)
             {
@@ -337,6 +398,15 @@ public sealed class InstanceManager
         Exception? failure = null;
         try
         {
+            try
+            {
+                await _metricsRecorder.StopAndPersistAsync(instanceId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                // 指标落盘异常不阻止进程正常终止
+            }
+
             if (_handles.TryRemove(instanceId, out QemuProcessHandle? handle))
             {
                 await handle.StopAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);

@@ -205,13 +205,17 @@ public class FidelitySemanticsTests
     }
 
     [Fact]
-    public void SampleSha256IsDeclaredAsPlaceholderNotRealDigest()
+    public void SampleCarriesRealOfficialSha256Digest()
     {
         var spec = SpecTestHost.Loader.ParseImage(SpecTestHost.ImageJson());
 
-        // 契约要求 sha256 为 64 位十六进制，占位值全零说明尚未实测。
+        // 契约要求 sha256 为 64 位十六进制；样例回填官方真实摘要后不再是全零占位。
         Assert.Equal(64, spec.Source.Sha256.Length);
-        Assert.Equal(new string('0', 64), spec.Source.Sha256);
+        Assert.All(spec.Source.Sha256, c =>
+            Assert.True(
+                (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'),
+                $"摘要字符 {c} 不是十六进制"));
+        Assert.NotEqual(new string('0', 64), spec.Source.Sha256);
     }
 
     [Fact]

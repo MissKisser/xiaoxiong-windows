@@ -5,6 +5,7 @@ using XBear.App.Presentation;
 using XBear.App.Services;
 using XBear.Core.Abstractions;
 using XBear.Core.Diagnostics;
+using XBear.Core.Instances;
 using XBear.Core.Spec;
 
 namespace XBear.App.ViewModels;
@@ -64,6 +65,8 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
     private readonly IInstanceRepository _repository;
     private readonly AuditLog _audit;
     private readonly TerminologyCatalog _terms;
+    private readonly IDeviceIdentityFactory _identityFactory;
+    private readonly IDensityAdvisor _densityAdvisor;
 
     [ObservableProperty]
     private string _displayName = string.Empty;
@@ -98,6 +101,12 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
     [ObservableProperty]
     private string _resultMessage = string.Empty;
 
+    [ObservableProperty]
+    private string _densityNotice = string.Empty;
+
+    [ObservableProperty]
+    private DensityAdvice? _densityAdvice;
+
     /// <summary>
     /// 构造实例创建视图模型。
     /// </summary>
@@ -105,11 +114,18 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
     /// <param name="images">可选镜像清单。</param>
     /// <param name="audit">审计日志。</param>
     /// <param name="terms">界面文案术语来源。</param>
+    /// <param name="identityFactory">
+    /// 设备标识工厂。为 null 时由实例仓库所在数据根重建，
+    /// 与实例仓库共用同一份标识墓碑。
+    /// </param>
+    /// <param name="densityAdvisor">多开密度顾问，为 null 时使用默认系统与基线顾问。</param>
     public InstanceEditorViewModel(
         IInstanceRepository repository,
         IReadOnlyDictionary<string, ImageSpec> images,
         AuditLog audit,
-        TerminologyCatalog terms)
+        TerminologyCatalog terms,
+        IDeviceIdentityFactory? identityFactory = null,
+        IDensityAdvisor? densityAdvisor = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(images);
@@ -119,6 +135,8 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
         _repository = repository;
         _audit = audit;
         _terms = terms;
+        _identityFactory = DeviceIdentityProvisioning.Resolve(repository, identityFactory);
+        _densityAdvisor = densityAdvisor ?? new InstanceDensityAdvisor();
 
         // 暴露级别绝不默认对外，初始一律为回环。
         Exposure = new ExposureSelection(new[]
@@ -298,6 +316,11 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
 
         foreach (PortForwardRowViewModel row in PortForwards)
         {
+            if (row.HostPort == 0 && row.GuestPort == 0)
+            {
+                continue;
+            }
+
             if (row.HostPort is < PortMin or > PortMax || row.GuestPort is < PortMin or > PortMax)
             {
                 return $"端口取值须在 {PortMin} 至 {PortMax} 之间。";
@@ -334,7 +357,8 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
 
         try
         {
-            InstanceSpec spec = BuildSpec();
+            await CheckDensityAsync().ConfigureAwait(true);
+            InstanceSpec spec = await BuildSpecAsync().ConfigureAwait(true);
             await _repository.SaveAsync(spec).ConfigureAwait(true);
 
             // 落盘后再留痕，保证审计记录与实际配置一致。
@@ -348,7 +372,7 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            (Presentation.ErrorCategoryText text, string? remediation) = ErrorPresenter.Describe(ex);
+            (Presentation.ErrorCategoryText text, string? remediation) = ErrorPresenter.Describe(ex, _terms);
             ValidationMessage = $"{text.Title}：{ex.Message}";
             if (!string.IsNullOrEmpty(remediation))
             {
@@ -359,7 +383,25 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
         }
     }
 
-    private InstanceSpec BuildSpec()
+    /// <summary>
+    /// 评估多开密度与建议上限。若现有实例达到或超出上限，生成非阻断提示文案供界面呈现。
+    /// </summary>
+    /// <returns>密度建议结论。</returns>
+    public async Task<DensityAdvice> CheckDensityAsync()
+    {
+        IReadOnlyList<InstanceSpec> existing = await _repository.ListAsync().ConfigureAwait(true);
+        DensityAdvice advice = _densityAdvisor.Evaluate(existing.Count, InstanceTerm);
+        DensityAdvice = advice;
+        DensityNotice = advice.IsExceeded ? advice.Message : string.Empty;
+        return advice;
+    }
+
+    /// <summary>
+    /// 组装实例配置。设备标识在此生成并写入配置：每个实例必须拥有独立标识，
+    /// 且不得与在册实例或已删除实例曾用过的标识重复。
+    /// </summary>
+    /// <returns>待落盘的实例配置。</returns>
+    private async Task<InstanceSpec> BuildSpecAsync()
     {
         List<PortForward> forwards = PortForwards
             .Where(r => r.HostPort > 0 && r.GuestPort > 0)
@@ -386,7 +428,8 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
                     ? null
                     : new ProxySpec { Host = ProxyHost, Port = ProxyPort },
                 Exposure = Exposure.Current
-            }
+            },
+            DeviceIdentity = await _identityFactory.GenerateAsync().ConfigureAwait(true),
         };
     }
 

@@ -40,52 +40,61 @@ public sealed record InputChannelPresentation(string Label, string Detail, bool 
 public static class InputChannelMapper
 {
     /// <summary>
-    /// 取输入通道的界面呈现。
+    /// 取输入通道的界面呈现。通路名称由术语表拼出，
+    /// 界面不得自行书写投屏等概念名。
     /// </summary>
     /// <param name="result">输入通路探测结论。</param>
+    /// <param name="terms">界面文案术语来源。</param>
     /// <returns>通道文案与不可用原因。</returns>
-    public static InputChannelPresentation Describe(InputProbeResult result)
+    public static InputChannelPresentation Describe(InputProbeResult result, TerminologyCatalog terms)
     {
         ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(terms);
+
+        string nativeInput = $"原生{terms.InputChannel}";
+        string projectionInput = $"{terms.Projection}{terms.InputChannel}";
 
         return result.Channel switch
         {
             InputChannelKind.Native => new InputChannelPresentation(
-                "原生输入",
+                nativeInput,
                 "通过 QMP 直接投递触摸与按键。",
                 IsUnavailable: false),
             InputChannelKind.Projection => new InputChannelPresentation(
-                "投屏输入",
-                "原生通路不可用，已降级为投屏并注入输入。",
+                projectionInput,
+                $"原生通路不可用，已降级为{terms.Projection}并注入{terms.InputChannel}。",
                 IsUnavailable: false),
             InputChannelKind.Unavailable => new InputChannelPresentation(
-                "输入通道不可用",
-                BuildUnavailableDetail(result),
+                $"{terms.InputChannel}不可用",
+                BuildUnavailableDetail(result, nativeInput, projectionInput),
                 IsUnavailable: true),
             _ => new InputChannelPresentation(
                 "尚未探测",
-                "实例尚未启动，输入通道状态未知。",
+                $"实例尚未启动，{terms.InputChannel}状态未知。",
                 IsUnavailable: true)
         };
     }
 
-    private static string BuildUnavailableDetail(InputProbeResult result)
+    private static string BuildUnavailableDetail(
+        InputProbeResult result,
+        string nativeInput,
+        string projectionInput)
     {
         List<string> reasons = new();
 
         if (!string.IsNullOrWhiteSpace(result.NativeFailure))
         {
-            reasons.Add($"原生输入：{result.NativeFailure}");
+            reasons.Add($"{nativeInput}：{result.NativeFailure}");
         }
 
         if (!string.IsNullOrWhiteSpace(result.ProjectionFailure))
         {
-            reasons.Add($"投屏输入：{result.ProjectionFailure}");
+            reasons.Add($"{projectionInput}：{result.ProjectionFailure}");
         }
 
         // 两条通路都没有给出原因时也要说明不可用，不能让用户对着「就绪」一样的界面等待。
         return reasons.Count == 0
-            ? "原生输入与投屏输入两条通路均不可用，该镜像无法交互。"
+            ? $"{nativeInput}与{projectionInput}两条通路均不可用，该镜像无法交互。"
             : $"两条通路均不可用。{string.Join("；", reasons)}";
     }
 }

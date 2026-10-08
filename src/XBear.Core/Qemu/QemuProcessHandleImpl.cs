@@ -56,6 +56,30 @@ internal sealed class QemuProcessHandleImpl : QemuProcessHandle
     /// <inheritdoc />
     public int ExitCode => Volatile.Read(ref _exitCode);
 
+    /// <inheritdoc />
+    public long? GetWorkingSetBytes()
+    {
+        if (_hasExited || Volatile.Read(ref _disposed) != 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (_process.HasExited)
+            {
+                return null;
+            }
+
+            _process.Refresh();
+            return _process.WorkingSet64;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
     /// <summary>记录进程已退出并写入退出码。</summary>
     /// <param name="exitCode">进程退出码。</param>
     internal void MarkExited(int exitCode)

@@ -1,0 +1,87 @@
+<!--
+    品牌资产。图形与共享规格 brand/ 下的 SVG 逐一对应，等比映射到 256×256 坐标系。
+    每一层的画刷都绑定到 palette.json 的语义角色（Palette.*），
+    因此品牌取色只有一条链路：语义名 → 设计令牌键 → 令牌取值。
+    留白规则与最小尺寸由规格规定，调用方不得单独拉伸某一方向，也不得自行改色。
+-->
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- 熊头与双耳合并为单一实心剪影，保证窄界面下先读出熊形。 -->
+    <GeometryGroup x:Key="Brand.Silhouette">
+        <EllipseGeometry Center="74,68" RadiusX="30" RadiusY="30" />
+        <EllipseGeometry Center="182,68" RadiusX="30" RadiusY="30" />
+        <EllipseGeometry Center="128,140" RadiusX="78" RadiusY="78" />
+    </GeometryGroup>
+
+    <!-- 吻部压在轮廓下方：内耳与吻部同色，是唯一一层反色。 -->
+    <GeometryGroup x:Key="Brand.Muzzle">
+        <EllipseGeometry Center="74,68" RadiusX="14" RadiusY="14" />
+        <EllipseGeometry Center="182,68" RadiusX="14" RadiusY="14" />
+        <EllipseGeometry Center="128,170" RadiusX="38" RadiusY="30" />
+    </GeometryGroup>
+
+    <!-- 五官最后叠加，64 px 以上才清晰，16–32 px 自然隐去是预期行为。 -->
+    <GeometryGroup x:Key="Brand.Features">
+        <EllipseGeometry Center="96,124" RadiusX="12" RadiusY="12" />
+        <EllipseGeometry Center="160,124" RadiusX="12" RadiusY="12" />
+        <EllipseGeometry Center="128,154" RadiusX="13" RadiusY="8" />
+    </GeometryGroup>
+
+    <!-- 应用图标地砖，自带内边距，使图形不依赖外部底色即可辨读。 -->
+    <RectangleGeometry x:Key="Brand.Tile" Rect="0,0,256,256" RadiusX="56" RadiusY="56" />
+
+    <!-- 纯图形标识（浅色底）。小熊棕轮廓、暖白吻部、墨色五官。 -->
+    <DrawingImage x:Key="Brand.Mark">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="{StaticResource Brand.Silhouette}" Brush="{DynamicResource Palette.bear-brown}" />
+                <GeometryDrawing Geometry="{StaticResource Brand.Muzzle}" Brush="{DynamicResource Palette.fur-light}" />
+                <GeometryDrawing Geometry="{StaticResource Brand.Features}" Brush="{DynamicResource Palette.ink}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!--
+        纯图形标识反色版（深色底）。共用同一套几何，只把轮廓与吻部两层主色对调，
+        五官改用森林绿以在深色底上保持足够对比。这是独立资产，不是可调参数。
+    -->
+    <DrawingImage x:Key="Brand.MarkInverse">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="{StaticResource Brand.Silhouette}" Brush="{DynamicResource Palette.fur-light}" />
+                <GeometryDrawing Geometry="{StaticResource Brand.Muzzle}" Brush="{DynamicResource Palette.bear-brown}" />
+                <GeometryDrawing Geometry="{StaticResource Brand.Features}" Brush="{DynamicResource Palette.forest-green}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!--
+        应用图标。16 px 到 256 px 全区间可用：地砖自带留白，缩到 16 px 时仍能读出
+        「绿地砖上的浅色熊」。地砖外围仍需留白不少于地砖边长的 4%，由调用方保证。
+    -->
+    <DrawingImage x:Key="Brand.AppIcon">
+        <DrawingImage.Drawing>
+            <DrawingGroup>
+                <GeometryDrawing Geometry="{StaticResource Brand.Tile}" Brush="{DynamicResource Palette.forest-green}" />
+                <GeometryDrawing Geometry="{StaticResource Brand.Silhouette}" Brush="{DynamicResource Palette.fur-light}" />
+                <GeometryDrawing Geometry="{StaticResource Brand.Muzzle}" Brush="{DynamicResource Palette.bear-brown}" />
+                <GeometryDrawing Geometry="{StaticResource Brand.Features}" Brush="{DynamicResource Palette.ink}" />
+            </DrawingGroup>
+        </DrawingImage.Drawing>
+    </DrawingImage>
+
+    <!--
+        横版标识的图形块。文字部分由排版层用设计令牌字体呈现，
+        因此此处只提供与浅色底版本完全一致的图形块，文字色随底色切换。
+    -->
+    <StaticResource x:Key="Brand.HorizontalMark" ResourceKey="Brand.AppIcon" />
+
+    <!-- 品牌标识显示尺寸。纯图形 16 px 起可辨，横版图形块按规格的等比关系取值。 -->
+    <sys:Double x:Key="Brand.Mark.Size.Sm">24</sys:Double>
+    <sys:Double x:Key="Brand.Mark.Size.Md">40</sys:Double>
+    <sys:Double x:Key="Brand.Mark.Size.Lg">72</sys:Double>
+    <sys:Double x:Key="Brand.Mark.Size.Empty">128</sys:Double>
+    <sys:Double x:Key="Brand.Mark.Size.Horizontal">48</sys:Double>
+</ResourceDictionary>

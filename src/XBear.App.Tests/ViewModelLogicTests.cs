@@ -191,7 +191,8 @@ public class ErrorPresenterTests
         ErrorCategoryText text = ErrorPresenter.Describe(category);
 
         Assert.NotEmpty(text.Title);
-        Assert.NotEmpty(text.Description);
+        Assert.NotEmpty(text.TechnicalName);
+        Assert.NotEmpty(text.TechnicalDetail);
     }
 
     [Fact]
@@ -223,6 +224,9 @@ public class ErrorPresenterTests
 /// <summary>输入通道与保真度的如实呈现测试。</summary>
 public class PresentationTests
 {
+    private static TerminologyCatalog Terms() =>
+        new(XBeeSpec.TestSpec().LoadTerminology());
+
     [Fact]
     public void UnavailableInputChannelShowsExplicitReason()
     {
@@ -231,7 +235,7 @@ public class PresentationTests
             NativeFailure: "QMP 未连接",
             ProjectionFailure: "scrcpy 缺失");
 
-        InputChannelPresentation presentation = InputChannelMapper.Describe(result);
+        InputChannelPresentation presentation = InputChannelMapper.Describe(result, Terms());
 
         Assert.True(presentation.IsUnavailable);
         Assert.Contains("QMP 未连接", presentation.Detail, StringComparison.Ordinal);
@@ -245,7 +249,7 @@ public class PresentationTests
     public void UnavailableInputChannelWithoutReasonsStillExplains()
     {
         InputChannelPresentation presentation =
-            InputChannelMapper.Describe(new InputProbeResult(InputChannelKind.Unavailable));
+            InputChannelMapper.Describe(new InputProbeResult(InputChannelKind.Unavailable), Terms());
 
         Assert.True(presentation.IsUnavailable);
         Assert.NotEmpty(presentation.Detail);
