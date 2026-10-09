@@ -27,6 +27,12 @@ public sealed class PortAllocatorTests
         return (ports[0], ports[1], ports[2], listeners);
     }
 
+    /// <summary>
+    /// 回归测试：三个端口必须互不相同且保持 adb &lt; qmp &lt; vnc 的次序。
+    /// 被测属性是分配结果的形状，而不是具体端口号——
+    /// 起点端口被本机其他进程占用时分配器会向后扫描，
+    /// 断言死端口号会随环境偶发失败。
+    /// </summary>
     [Fact]
     public async Task 分配的三个端口互不相同且递增()
     {
@@ -35,11 +41,15 @@ public sealed class PortAllocatorTests
         {
             var ports = await allocator.AcquireAsync("instance-1");
 
-            Assert.Equal(PortAllocator.DefaultAdbStartPort, ports.Adb);
-            Assert.Equal(PortAllocator.DefaultQmpStartPort, ports.Qmp);
-            Assert.Equal(PortAllocator.DefaultVncStartPort, ports.Vnc);
             Assert.True(ports.Adb < ports.Qmp, $"adb {ports.Adb} 应小于 qmp {ports.Qmp}。");
             Assert.True(ports.Qmp < ports.Vnc, $"qmp {ports.Qmp} 应小于 vnc {ports.Vnc}。");
+            Assert.True(
+                ports.Adb >= PortAllocator.DefaultAdbStartPort,
+                $"adb {ports.Adb} 不应早于起点端口 {PortAllocator.DefaultAdbStartPort}。");
+
+            Assert.True(IsPortFree(ports.Adb), $"分配出的端口 {ports.Adb} 应当确实可绑定。");
+            Assert.True(IsPortFree(ports.Qmp), $"分配出的端口 {ports.Qmp} 应当确实可绑定。");
+            Assert.True(IsPortFree(ports.Vnc), $"分配出的端口 {ports.Vnc} 应当确实可绑定。");
         }
         finally
         {

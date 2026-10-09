@@ -35,7 +35,15 @@ public interface IAdbClient : IAsyncDisposable
     /// <summary>连接实例并执行握手，取得协议版本。</summary>
     /// <param name="port">实例在宿主上映射的 adb 端口。</param>
     /// <param name="cancellationToken">取消令牌。</param>
-    Task<int> ConnectAsync(int port, CancellationToken cancellationToken = default);
+    /// <param name="timeout">本次连接与握手的等待上限，为空时使用客户端默认上限。</param>
+    /// <exception cref="Diagnostics.XBearException">
+    /// 连接或握手失败为 <see cref="Diagnostics.ErrorCategory.Protocol"/>，
+    /// 超过等待上限为 <see cref="Diagnostics.ErrorCategory.Timeout"/>。
+    /// </exception>
+    Task<int> ConnectAsync(
+        int port,
+        CancellationToken cancellationToken = default,
+        TimeSpan? timeout = null);
 
     /// <summary>以 root 身份执行 shell 命令。</summary>
     /// <param name="command">命令与参数。</param>

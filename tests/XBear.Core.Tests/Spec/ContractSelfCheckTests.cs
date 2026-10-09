@@ -61,6 +61,54 @@ public class ContractSelfCheckTests
         Assert.False(schema["additionalProperties"]!.GetValue<bool>());
     }
 
+    /// <summary>platformConfig 契约声明的可选字段名。</summary>
+    public static TheoryData<string> PlatformConfigFieldNames =>
+        new()
+        {
+            "initrdImage",
+            "kernelAppend"
+        };
+
+    /// <summary>
+    /// platformConfig 内的字段一旦在契约中声明，模型必须绑定同名属性，
+    /// 否则跨端写入的取值会被静默丢弃，实例按缺省值启动。
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(PlatformConfigFieldNames))]
+    public void PlatformConfigModelBindsEveryDeclaredField(string fieldName)
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.InstanceSchemaFileName))!
+            .AsObject();
+
+        var declared = schema["properties"]!["platformConfig"]!["properties"]!.AsObject();
+        Assert.True(declared.ContainsKey(fieldName), $"platformConfig 契约未声明 {fieldName}");
+        Assert.Equal("string", declared[fieldName]!["type"]!.GetValue<string>());
+
+        var property = typeof(PlatformConfig).GetProperty(PropertyName(fieldName));
+        Assert.NotNull(property);
+
+        var attribute = property!.GetCustomAttributes(typeof(JsonPropertyNameAttribute), false)
+            .Cast<JsonPropertyNameAttribute>()
+            .Single();
+
+        Assert.Equal(fieldName, attribute.Name);
+    }
+
+    /// <summary>
+    /// platformConfig 是逃生舱，声明可选字段不得顺带把它封闭：
+    /// 两端各自的专有字段必须继续放得下，否则会立刻打破契约的逃生舱语义。
+    /// </summary>
+    [Fact]
+    public void PlatformConfigStaysOpenAfterDeclaringFields()
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.InstanceSchemaFileName))!
+            .AsObject();
+
+        Assert.Null(schema["properties"]!["platformConfig"]!["additionalProperties"]);
+    }
+
     [Fact]
     public void ImageSchemaRejectsUnknownTopLevelFields()
     {
@@ -228,7 +276,12 @@ public class ContractSelfCheckTests
         Assert.All(baseline.Metrics, m =>
         {
             Assert.True(m.Target.HasKnownOperator());
-            Assert.Null(m.Measured);
+
+            // 实测列只接受真实测量：声明了受阻原因的指标没有测量依据，measured 必须保持 null；
+            // 反过来已填实测值的指标不得再声明受阻原因，否则等于用受阻话术为占位数字背书。
+            Assert.True(
+                m.IsMeasured() != m.IsBlocked(),
+                $"指标 {m.Id} 的 measured 与 blockedBy 必须互斥：受阻指标实测值必须为 null，已测指标不得再声明受阻");
         });
         Assert.NotEmpty(baseline.FillPolicy);
     }

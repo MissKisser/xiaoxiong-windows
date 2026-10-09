@@ -182,6 +182,92 @@ public sealed class AdbClientTests : IDisposable
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ShellAsync("sleep 100", cts.Token));
     }
 
+    /// <summary>
+    /// 回归测试：宿主转发会在宿主侧立即接受连接，adbd 未就绪时客户端会永久阻塞在握手上，
+    /// 必须由等待上限给出可识别的超时结论而不是挂死。
+    /// </summary>
+    [Fact]
+    public async Task ConnectAsync_握手无响应时按等待上限抛超时而不是挂死()
+    {
+        await using var server = new FakeAdbdServer { StallHandshake = true };
+        await using var client = new AdbClient();
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        XBearException error = await Assert.ThrowsAsync<XBearException>(() =>
+            client.ConnectAsync(server.Port, timeout: TimeSpan.FromMilliseconds(300)));
+        stopwatch.Stop();
+
+        Assert.Equal(ErrorCategory.Timeout, error.Category);
+        Assert.False(string.IsNullOrWhiteSpace(error.Remediation));
+        Assert.Contains("超时", error.Message, StringComparison.Ordinal);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(10),
+            $"等待上限未生效，连接实际耗时 {stopwatch.Elapsed}。");
+    }
+
+    /// <summary>等待上限写在客户端构造参数上时同样生效。</summary>
+    [Fact]
+    public async Task ConnectAsync_客户端级等待上限同样生效()
+    {
+        await using var server = new FakeAdbdServer { StallHandshake = true };
+        await using var client = new AdbClient(TimeSpan.FromMilliseconds(300));
+
+        XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ConnectAsync(server.Port));
+
+        Assert.Equal(ErrorCategory.Timeout, error.Category);
+    }
+
+    /// <summary>默认等待上限必须存在，否则调用方在默认路径上依旧会被永久阻塞。</summary>
+    [Fact]
+    public void 客户端具备有限的默认连接等待上限()
+    {
+        Assert.True(AdbClient.DefaultConnectTimeout > TimeSpan.Zero);
+        Assert.True(AdbClient.DefaultConnectTimeout <= TimeSpan.FromSeconds(30));
+    }
+
+    /// <summary>调用方主动取消必须保持取消语义，不得被包装成超时或协议错误。</summary>
+    [Fact]
+    public async Task ConnectAsync_调用方取消保持取消语义()
+    {
+        await using var server = new FakeAdbdServer { StallHandshake = true };
+        await using var client = new AdbClient();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.ConnectAsync(server.Port, cts.Token, TimeSpan.FromSeconds(30)));
+    }
+
+    /// <summary>连接被拒是协议层失败而非超时，两类结论不得混淆。</summary>
+    [Fact]
+    public async Task ConnectAsync_连接被拒仍归类为协议错误()
+    {
+        var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+        probe.Start();
+        int port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
+        probe.Stop();
+
+        await using var client = new AdbClient();
+        XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ConnectAsync(port));
+
+        Assert.Equal(ErrorCategory.Protocol, error.Category);
+    }
+
+    /// <summary>握手中途连接被关闭时给出协议层结论，不谎报成连接失败或挂死。</summary>
+    [Fact]
+    public async Task ConnectAsync_握手阶段连接被关闭按协议错误上报()
+    {
+        await using var server = new FakeAdbdServer { StallHandshake = true };
+        await using var client = new AdbClient();
+
+        Task<int> connect = client.ConnectAsync(server.Port, timeout: TimeSpan.FromSeconds(10));
+        await Task.Delay(200);
+        await server.DisposeAsync();
+
+        XBearException error = await Assert.ThrowsAsync<XBearException>(() => connect);
+        Assert.Equal(ErrorCategory.Protocol, error.Category);
+        Assert.Contains("提前关闭", error.Message, StringComparison.Ordinal);
+    }
+
     public void Dispose()
     {
         foreach (string path in _temporaryFiles)

@@ -55,7 +55,7 @@ public class ModelRoundTripTests
         Assert.NotNull(spec.PlatformConfig);
 
         var original = JsonNode.Parse(json)!["platformConfig"]!;
-        var reparsed = JsonSerializer.SerializeToNode(spec.PlatformConfig!.Value);
+        var reparsed = JsonSerializer.SerializeToNode(spec.PlatformConfig);
 
         Assert.True(JsonNode.DeepEquals(original, reparsed), "platformConfig 未能原样保留");
     }
@@ -225,6 +225,60 @@ public class ModelRoundTripTests
 
         Assert.True(result.IsValid, result.DescribeErrors());
         Assert.Null(SpecTestHost.Loader.ParseInstance(sample.ToJsonString()).Resources.CpuModel);
+    }
+
+    [Fact]
+    public void InitrdImageAndKernelAppendSurviveRoundTrip()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["platformConfig"]!["initrdImage"] = @"D:\xbear\boot\initrd.img";
+        sample["platformConfig"]!["kernelAppend"] = "root=/dev/ram0 quiet nomodeset custom=1";
+
+        var first = SpecTestHost.Loader.ParseInstance(sample.ToJsonString());
+        Assert.NotNull(first.PlatformConfig);
+        Assert.Equal(@"D:\xbear\boot\initrd.img", first.PlatformConfig!.InitrdImage);
+        Assert.Equal("root=/dev/ram0 quiet nomodeset custom=1", first.PlatformConfig.KernelAppend);
+
+        var reserialized = JsonSerializer.Serialize(first, SpecLoader.SerializerOptions);
+        var second = SpecTestHost.Loader.ParseInstance(reserialized);
+
+        Assert.NotNull(second.PlatformConfig);
+        Assert.Equal(@"D:\xbear\boot\initrd.img", second.PlatformConfig!.InitrdImage);
+        Assert.Equal("root=/dev/ram0 quiet nomodeset custom=1", second.PlatformConfig.KernelAppend);
+        Assert.Contains("\"initrdImage\":", reserialized, StringComparison.Ordinal);
+        Assert.Contains("\"kernelAppend\":", reserialized, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 向后兼容：未声明 initrdImage 与 kernelAppend 的存量实例文件必须解析为 null，
+    /// 且再次写出时不得凭空补出该键，确保旧版本契约文件双向兼容。
+    /// </summary>
+    [Fact]
+    public void InstanceFileWithoutNewFieldsParsesToNullAndIsNotWrittenBack()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["platformConfig"]!.AsObject().Remove("initrdImage");
+        sample["platformConfig"]!.AsObject().Remove("kernelAppend");
+
+        var spec = SpecTestHost.Loader.ParseInstance(sample.ToJsonString());
+
+        Assert.NotNull(spec.PlatformConfig);
+        Assert.Null(spec.PlatformConfig!.InitrdImage);
+        Assert.Null(spec.PlatformConfig.KernelAppend);
+
+        var reserialized = JsonSerializer.Serialize(spec, SpecLoader.SerializerOptions);
+        Assert.DoesNotContain("initrdImage", reserialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("kernelAppend", reserialized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WindowsFixtureContainsInitrdImageAndKernelAppend()
+    {
+        var spec = SpecTestHost.Loader.ParseInstance(SpecTestHost.WindowsInstanceJson());
+
+        Assert.NotNull(spec.PlatformConfig);
+        Assert.Equal("initrd.img", spec.PlatformConfig!.InitrdImage);
+        Assert.Equal("root=/dev/ram0 quiet nomodeset", spec.PlatformConfig.KernelAppend);
     }
 
     /// <summary>

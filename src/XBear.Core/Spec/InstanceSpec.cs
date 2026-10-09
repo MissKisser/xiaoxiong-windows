@@ -30,9 +30,55 @@ public sealed class InstanceSpec
     [JsonPropertyName("deviceIdentity")]
     public DeviceIdentity? DeviceIdentity { get; set; }
 
-    /// <summary>平台特有字段逃生舱，通用契约不解析其内部结构。</summary>
+    /// <summary>平台特有字段逃生舱，通用契约不解析其内部结构，未映射的键原样保留。</summary>
     [JsonPropertyName("platformConfig")]
-    public JsonElement? PlatformConfig { get; set; }
+    public PlatformConfig? PlatformConfig { get; set; }
+}
+
+/// <summary>
+/// 实例平台特有配置。
+/// 契约作为逃生舱不限制内部结构，两端平台特有字段均置于此处；未显式声明的键原样保留。
+/// </summary>
+public sealed class PlatformConfig
+{
+    /// <summary>加速器名称，如 whpx、tcg。</summary>
+    [JsonPropertyName("accelerator")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Accelerator { get; set; }
+
+    /// <summary>加速器附加选项，如 kernel-irqchip=off。</summary>
+    [JsonPropertyName("acceleratorOptions")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AcceleratorOptions { get; set; }
+
+    /// <summary>主板架构机型，如 q35。</summary>
+    [JsonPropertyName("machine")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Machine { get; set; }
+
+    /// <summary>显卡设备型号，如 virtio-vga-gl。</summary>
+    [JsonPropertyName("graphics")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Graphics { get; set; }
+
+    /// <summary>内核镜像文件路径或引用。</summary>
+    [JsonPropertyName("kernelImage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? KernelImage { get; set; }
+
+    /// <summary>初始 ramdisk 文件路径或引用。</summary>
+    [JsonPropertyName("initrdImage")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? InitrdImage { get; set; }
+
+    /// <summary>内核命令行骨架与自定义参数。</summary>
+    [JsonPropertyName("kernelAppend")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? KernelAppend { get; set; }
+
+    /// <summary>未映射到强类型属性的平台特有字段，反序列化时原样保留，序列化时原样写出。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }
 
 /// <summary>实例资源配额。</summary>

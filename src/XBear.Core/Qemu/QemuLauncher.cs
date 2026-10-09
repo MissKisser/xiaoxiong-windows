@@ -73,6 +73,7 @@ public sealed class QemuLauncher : IQemuLauncher
 
     /// <summary>启动实例进程并开始捕获日志。</summary>
     /// <param name="spec">实例配置。</param>
+    /// <param name="image">实例引用的镜像清单，可为空，空值不下发镜像保真度相关引导参数。</param>
     /// <param name="diskPath">实例可写磁盘镜像路径。</param>
     /// <param name="ports">本次分配到的宿主端口。</param>
     /// <param name="cancellationToken">取消令牌。</param>
@@ -83,6 +84,7 @@ public sealed class QemuLauncher : IQemuLauncher
     /// </exception>
     public async Task<QemuProcessHandle> StartAsync(
         InstanceSpec spec,
+        ImageSpec? image,
         string diskPath,
         AllocatedPorts ports,
         CancellationToken cancellationToken = default)
@@ -90,7 +92,7 @@ public sealed class QemuLauncher : IQemuLauncher
         ArgumentNullException.ThrowIfNull(spec);
 
         var executablePath = ResolveExecutablePath();
-        var arguments = _argBuilder.BuildStartArguments(spec, diskPath, ports);
+        var arguments = _argBuilder.BuildStartArguments(spec, image, diskPath, ports);
         var logFilePath = BuildLogFilePath(spec.Id);
 
         var logWriter = new StreamWriter(
@@ -145,7 +147,7 @@ public sealed class QemuLauncher : IQemuLauncher
                 exception);
         }
 
-        var handle = new QemuProcessHandleImpl(process, startInfo.Arguments, logFilePath, logWriter);
+        var handle = new QemuProcessHandleImpl(process, startInfo.Arguments, logFilePath, logWriter, ports.Qmp);
 
         await ProbeStartupFailureAsync(handle, cancellationToken).ConfigureAwait(false);
         return handle;

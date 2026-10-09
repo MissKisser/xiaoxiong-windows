@@ -1,5 +1,4 @@
 using System.Text;
-using System.Text.RegularExpressions;
 using XBear.Core.Diagnostics;
 using XBear.Core.Spec;
 
@@ -14,6 +13,9 @@ namespace XBear.Core.Qemu;
 /// 解析 /proc/cmdline 中以 <see cref="AndroidBootPropertyPrefix"/> 开头的键值对，
 /// 并映射为只读的 ro.boot.* 属性，随后由 guest 侧框架消费。
 /// 该通道只覆盖「引导期属性」，因此并非每一项设备标识都能经此生效。
+/// QEMU 只在传了 -kernel 的内核引导模式下接受 -append，
+/// 因此本合成器的调用方必须在磁盘引导模式下跳过 -append，
+/// 序列号改由 <see cref="DeviceIdentityChannels"/> 的 SMBIOS 通道下发。
 /// </remarks>
 public static class KernelCommandLine
 {
@@ -59,14 +61,6 @@ public static class KernelCommandLine
     };
 
     /// <summary>
-    /// 引导命令行取值允许的字符集。
-    /// 内核按空白切分命令行，标识一旦掺入空白、引号或逗号就会被拆成额外的引导项，
-    /// 导致实例以错误的标识启动，因此此处按白名单校验并在越界时拒绝生成。
-    /// </summary>
-    private static readonly Regex AllowedValuePattern =
-        new(@"^[A-Za-z0-9._-]+$", RegexOptions.CultureInvariant);
-
-    /// <summary>
     /// 把设备标识映射为内核引导命令行片段，空字段不产出片段。
     /// </summary>
     /// <param name="identity">实例设备标识，可为空，空值不产出任何片段。</param>
@@ -106,7 +100,7 @@ public static class KernelCommandLine
             : null;
 
     /// <summary>
-    /// 合成完整的内核引导命令行。
+    /// 合成完整的内核引导命令行。仅内核引导模式（已配置 -kernel）可使用。
     /// </summary>
     /// <param name="identity">实例设备标识，可为空。</param>
     /// <param name="systemWrite">镜像保真度中 P2 系统可写的实测结论。</param>
@@ -159,7 +153,7 @@ public static class KernelCommandLine
     /// <exception cref="XBearException">取值含白名单外字符时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
     private static string ComposeFragment(string key, string value)
     {
-        if (!AllowedValuePattern.IsMatch(value))
+        if (!DeviceIdentityChannels.IsAllowedValue(value))
         {
             throw new XBearException(
                 ErrorCategory.Spec,

@@ -88,6 +88,43 @@ public class SchemaCompatibilityTests
     }
 
     [Fact]
+    public void SchemaRejectsNonStringInitrdImage()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["platformConfig"]!.AsObject()["initrdImage"] = 12345;
+
+        var result = SpecTestHost.Validator.ValidateInstance(sample.ToJsonString());
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Path == "/platformConfig/initrdImage");
+    }
+
+    [Fact]
+    public void SchemaRejectsNonStringKernelAppend()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["platformConfig"]!.AsObject()["kernelAppend"] = true;
+
+        var result = SpecTestHost.Validator.ValidateInstance(sample.ToJsonString());
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Path == "/platformConfig/kernelAppend");
+    }
+
+    [Fact]
+    public void PlatformConfigAcceptsUnknownFieldsAsEscapeHatch()
+    {
+        // 与 NestedSchemasDoNotDeclareAdditionalPropertiesFalse 一致：
+        // platformConfig 逃生舱未声明 additionalProperties: false，各端专有字段或扩展配置正常通过。
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["platformConfig"]!.AsObject()["customDebugOption"] = "active";
+
+        var result = SpecTestHost.Validator.ValidateInstance(sample.ToJsonString());
+
+        Assert.True(result.IsValid, result.DescribeErrors());
+    }
+
+    [Fact]
     public void UnknownImageFieldIsRejected()
     {
         var sample = JsonNode.Parse(SpecTestHost.ImageJson())!.AsObject();

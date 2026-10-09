@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using XBear.Core.Abstractions;
 using XBear.Core.Diagnostics;
+using XBear.Core.Qmp;
 
 namespace XBear.Core.Qemu;
 
@@ -9,10 +10,14 @@ internal sealed class QemuProcessHandleImpl : QemuProcessHandle
 {
     private const int NotExitedExitCode = -1;
 
+    /// <summary>优雅终止后等待进程自行退出的宽限上限，超出即转强杀。</summary>
+    private static readonly TimeSpan GracefulExitGrace = TimeSpan.FromSeconds(2);
+
     private readonly Process _process;
     private readonly StreamWriter _logWriter;
     private readonly object _writeGate = new();
     private readonly Task _completion;
+    private readonly int? _qmpPort;
 
     private int _exitCode = NotExitedExitCode;
     private volatile bool _hasExited;
@@ -23,14 +28,17 @@ internal sealed class QemuProcessHandleImpl : QemuProcessHandle
     /// <param name="commandLine">启动时使用的完整命令行。</param>
     /// <param name="logFilePath">合并日志文件路径。</param>
     /// <param name="logWriter">日志写入器，需处于自动刷新状态。</param>
+    /// <param name="qmpPort">该实例的 QMP 宿主端口，为空表示无 QMP 通路可用。</param>
     internal QemuProcessHandleImpl(
         Process process,
         string commandLine,
         string logFilePath,
-        StreamWriter logWriter)
+        StreamWriter logWriter,
+        int? qmpPort = null)
     {
         _process = process;
         _logWriter = logWriter;
+        _qmpPort = qmpPort;
 
         CommandLine = commandLine;
         LogFilePath = logFilePath;
@@ -89,6 +97,13 @@ internal sealed class QemuProcessHandleImpl : QemuProcessHandle
     }
 
     /// <summary>终止进程并等待其完全退出。</summary>
+    /// <remarks>
+    /// 终止顺序为：存在主窗口时先请求关闭主窗口并按调用方给定时限等待；
+    /// 随后经 QMP 请求 guest 有序退出，只给固定短宽限；
+    /// 两者都未奏效才强杀进程树并按调用方给定时限等待退出。
+    /// 无头实例没有主窗口，若仍对无窗口进程调用关闭主窗口，该调用永不生效，
+    /// 会白白耗尽整个等待时限，因此必须先判定窗口是否存在再决定是否请求关闭。
+    /// </remarks>
     /// <param name="timeout">等待超时，超时后强杀。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <exception cref="XBearException">强杀后进程仍未退出时抛出 <see cref="ErrorCategory.Process"/>。</exception>
@@ -102,9 +117,22 @@ internal sealed class QemuProcessHandleImpl : QemuProcessHandle
             return;
         }
 
-        _process.CloseMainWindow();
+        TimeSpan grace = timeout < GracefulExitGrace ? timeout : GracefulExitGrace;
 
-        if (await WaitForExitAsync(timeout, cancellationToken).ConfigureAwait(false))
+        if (HasMainWindow())
+        {
+            _process.CloseMainWindow();
+
+            if (await WaitForExitAsync(timeout, cancellationToken).ConfigureAwait(false))
+            {
+                await _completion.ConfigureAwait(false);
+                return;
+            }
+        }
+
+        await RequestGracefulQmpQuitAsync(grace, cancellationToken).ConfigureAwait(false);
+
+        if (await WaitForExitAsync(grace, cancellationToken).ConfigureAwait(false))
         {
             await _completion.ConfigureAwait(false);
             return;
@@ -225,6 +253,61 @@ internal sealed class QemuProcessHandleImpl : QemuProcessHandle
         }
 
         return _hasExited;
+    }
+
+    /// <summary>判定进程是否拥有可被关闭的主窗口，无头进程一律返回 false。</summary>
+    /// <returns>存在主窗口返回 true。</returns>
+    private bool HasMainWindow()
+    {
+        if (_hasExited || SafeHasExited(_process))
+        {
+            return false;
+        }
+
+        try
+        {
+            // 无头模式下 QEMU 不创建任何顶层窗口，此时关闭主窗口永远不会有回包。
+            return _process.MainWindowHandle != IntPtr.Zero
+                && !string.IsNullOrEmpty(_process.MainWindowTitle);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException
+                                              or System.ComponentModel.Win32Exception
+                                              or NotSupportedException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 经 QMP 请求 QEMU 有序退出。QMP 不可达、握手失败或命令被拒都属可预期情况，
+    /// 交由随后的强杀兜底，此处只如实吞掉异常不做上抛。
+    /// </summary>
+    /// <param name="grace">本次请求允许占用的时长上限。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>表示请求已发出的异步结果。</returns>
+    private async Task RequestGracefulQmpQuitAsync(TimeSpan grace, CancellationToken cancellationToken)
+    {
+        if (_qmpPort is not { } port || grace <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(grace);
+
+            var qmp = new QmpClient(grace);
+            await qmp.ConnectAsync(port, cts.Token).ConfigureAwait(false);
+            await qmp.ExecuteAsync("quit", null, cts.Token).ConfigureAwait(false);
+            await qmp.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is XBearException or OperationCanceledException
+                                              or IOException or System.Net.Sockets.SocketException
+                                              or ObjectDisposedException)
+        {
+            // 优雅退出请求未能送达，后续强杀仍可正常收敛。
+        }
     }
 
     /// <summary>读取进程退出码，状态不可用时返回 -1。</summary>

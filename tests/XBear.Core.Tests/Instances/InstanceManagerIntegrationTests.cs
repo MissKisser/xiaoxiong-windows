@@ -71,7 +71,7 @@ public sealed class InstanceManagerIntegrationTests : IDisposable
     }
 
     [Fact]
-    public async Task 启动并停止实例_自动记录耗时与采样并在停止时落盘()
+    public async Task 启动并停止实例_按阶段记录耗时与采样并在停止时落盘()
     {
         _clock.SetUtcNow(new DateTimeOffset(2026, 10, 8, 14, 0, 0, TimeSpan.Zero));
 
@@ -101,8 +101,28 @@ public sealed class InstanceManagerIntegrationTests : IDisposable
         var root = doc.RootElement;
 
         Assert.Equal("inst-integ-01", root.GetProperty("instanceId").GetString());
-        Assert.True(root.GetProperty("startup").GetProperty("success").GetBoolean());
+        Assert.True(root.GetProperty("startup").GetProperty("processSpawned").GetBoolean());
         Assert.Equal(JsonValueKind.Object, root.GetProperty("summary").ValueKind);
+    }
+
+    /// <summary>
+    /// 回归测试：本集成场景未配置调试通路就绪探测，
+    /// 此时不得把「进程刚拉起」当成冷启动完成写入就绪结论。
+    /// </summary>
+    [Fact]
+    public async Task 未配置就绪探测时落盘文档不含冷启动结论()
+    {
+        await _manager.StartAsync("inst-integ-01");
+        string metricsPath = await _metricsRecorder.StopAndPersistAsync("inst-integ-01");
+
+        string content = await File.ReadAllTextAsync(metricsPath);
+        using var doc = JsonDocument.Parse(content);
+        var startup = doc.RootElement.GetProperty("startup");
+
+        Assert.True(startup.GetProperty("processSpawned").GetBoolean());
+        Assert.False(startup.GetProperty("debugChannelReady").GetBoolean());
+        Assert.False(startup.TryGetProperty("readyAt", out _));
+        Assert.False(startup.TryGetProperty("coldStartSeconds", out _));
     }
 
     [Fact]

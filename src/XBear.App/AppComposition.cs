@@ -54,13 +54,22 @@ public static class AppComposition
         var identityFactory = new DeviceIdentityFactory(repository, tombstones);
 
         IPortAllocator portAllocator = new PortAllocator();
-        var argBuilder = new QemuArgBuilder();
+        var argBuilder = new QemuArgBuilder(new AcceleratorOptions
+        {
+            Accelerator = AcceleratorOptions.WhpxAccelerator,
+            Options = AcceleratorOptions.DefaultWhpxOptions,
+        });
+
         var paths = new QemuPaths();
         IQemuLauncher launcher = new QemuLauncher(paths, argBuilder, logRoot);
         IQcow2Manager qcow2 = new Qcow2Manager(paths);
 
         // 校验器在此装配：Core 不引用 Schema 库，求值实现由引用了 JsonSchema.Net 的本层注入。
         var validator = new SpecValidator(SchemaEvaluatorFactory.Create(), loader);
+
+        // 镜像清单先于编排器装配：启动参数中的保真度通道必须与镜像实测证据同源。
+        ImageLoadOutcome outcome = LoadImages(loader, validator, imagesRoot);
+        var imageCatalog = new ImageCatalog(outcome.Images.Values);
 
         var manager = new InstanceManager(
             repository,
@@ -70,13 +79,13 @@ public static class AppComposition
             qcow2,
             imagesRoot,
             instancesRoot,
-            validator);
+            validator,
+            imageCatalog,
+            debugChannelProbeTimeout: InstanceManager.DefaultDebugChannelProbeTimeout);
 
         var diagnostics = new DiagnosticsExporter(loader);
         var audit = new AuditLog(Path.Combine(logRoot, "audit.log"));
         var terms = new TerminologyCatalog(loader.LoadTerminology());
-
-        ImageLoadOutcome outcome = LoadImages(loader, validator, imagesRoot);
 
         return new AppServices(
             repository,

@@ -6,28 +6,52 @@ using XBear.Core.Abstractions;
 
 namespace XBear.Core.Diagnostics;
 
-/// <summary>实例启动耗时指标。</summary>
+/// <summary>
+/// 实例启动指标。启动被拆成两个语义明确的阶段：
+/// 进程拉起（宿主侧把 QEMU 进程创建出来）与调试通路就绪（冷启动完成、adb 通路可连接）。
+/// 二者的量级相差一个数量级以上，混在一个「耗时」字段里会得出与真实冷启动无关的结论。
+/// </summary>
 public sealed class InstanceStartupMetric
 {
     /// <summary>发起启动时间点。</summary>
     [JsonPropertyName("startedAt")]
     public DateTimeOffset StartedAt { get; set; }
 
-    /// <summary>实例就绪（转入运行态）时间点。</summary>
+    /// <summary>QEMU 进程拉起完成时间点，未拉起成功时为 null。</summary>
+    [JsonPropertyName("processSpawnedAt")]
+    public DateTimeOffset? ProcessSpawnedAt { get; set; }
+
+    /// <summary>进程拉起耗时（秒），即从发起到 QEMU 进程创建成功的间隔。</summary>
+    [JsonPropertyName("processSpawnSeconds")]
+    public double? ProcessSpawnSeconds { get; set; }
+
+    /// <summary>进程拉起耗时（毫秒）。</summary>
+    [JsonPropertyName("processSpawnMs")]
+    public double? ProcessSpawnMs { get; set; }
+
+    /// <summary>调试通路就绪时间点，未就绪时为 null。</summary>
     [JsonPropertyName("readyAt")]
     public DateTimeOffset? ReadyAt { get; set; }
 
-    /// <summary>启动总耗时（秒）。</summary>
-    [JsonPropertyName("durationSeconds")]
-    public double? DurationSeconds { get; set; }
+    /// <summary>冷启动耗时（秒），即从发起到调试通路可连接的间隔；未就绪时为 null。</summary>
+    [JsonPropertyName("coldStartSeconds")]
+    public double? ColdStartSeconds { get; set; }
 
-    /// <summary>启动总耗时（毫秒）。</summary>
-    [JsonPropertyName("durationMs")]
-    public double? DurationMs { get; set; }
+    /// <summary>冷启动耗时（毫秒），未就绪时为 null。</summary>
+    [JsonPropertyName("coldStartMs")]
+    public double? ColdStartMs { get; set; }
 
-    /// <summary>启动是否成功就绪。</summary>
-    [JsonPropertyName("success")]
-    public bool Success { get; set; }
+    /// <summary>QEMU 进程是否成功拉起。</summary>
+    [JsonPropertyName("processSpawned")]
+    public bool ProcessSpawned { get; set; }
+
+    /// <summary>调试通路是否已确认可连接，未确认前不得为 true。</summary>
+    [JsonPropertyName("debugChannelReady")]
+    public bool DebugChannelReady { get; set; }
+
+    /// <summary>启动失败或未就绪的原因，如实记录而不留空。</summary>
+    [JsonPropertyName("note")]
+    public string? Note { get; set; }
 }
 
 /// <summary>单次工作集物理内存采样记录。</summary>
@@ -81,9 +105,13 @@ public sealed class InstanceMetricsSnapshot
     [JsonPropertyName("recordedAt")]
     public DateTimeOffset RecordedAt { get; set; }
 
-    /// <summary>启动耗时指标。</summary>
+    /// <summary>启动分阶段耗时指标。</summary>
     [JsonPropertyName("startup")]
     public InstanceStartupMetric? Startup { get; set; }
+
+    /// <summary>发起启动时的宿主物理内存采样，作为多开数据的可信度前提。</summary>
+    [JsonPropertyName("hostMemory")]
+    public HostMemorySample? HostMemory { get; set; }
 
     /// <summary>周期采样的内存序列。</summary>
     [JsonPropertyName("memorySamples")]
@@ -97,18 +125,31 @@ public sealed class InstanceMetricsSnapshot
 /// <summary>指标采集器契约。</summary>
 public interface IMetricsRecorder : IAsyncDisposable, IDisposable
 {
-    /// <summary>记录实例启动开始时间点。</summary>
+    /// <summary>记录实例启动开始时间点，并采样一次宿主物理内存。</summary>
     /// <param name="instanceId">实例标识。</param>
     void OnStarting(string instanceId);
 
-    /// <summary>记录实例就绪时间点并开启工作集内存周期采样。</summary>
+    /// <summary>记录 QEMU 进程拉起完成的时间点，并开启工作集内存周期采样。</summary>
     /// <param name="instanceId">实例标识。</param>
     /// <param name="handle">QEMU 进程句柄。</param>
-    void OnRunning(string instanceId, QemuProcessHandle handle);
+    void OnProcessSpawned(string instanceId, QemuProcessHandle handle);
+
+    /// <summary>记录调试通路已就绪，冷启动耗时据此结算。</summary>
+    /// <param name="instanceId">实例标识。</param>
+    void OnDebugChannelReady(string instanceId);
+
+    /// <summary>
+    /// 记录调试通路在探测上限内未就绪。
+    /// 未就绪时 readyAt 保持为空，不产出任何冷启动耗时结论。
+    /// </summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <param name="reason">未就绪的原因。</param>
+    void OnDebugChannelUnavailable(string instanceId, string reason);
 
     /// <summary>记录实例启动失败并停止采集。</summary>
     /// <param name="instanceId">实例标识。</param>
-    void OnStartupFailed(string instanceId);
+    /// <param name="reason">失败原因，可为空。</param>
+    void OnStartupFailed(string instanceId, string? reason = null);
 
     /// <summary>手动触发一次内存采样。</summary>
     /// <param name="instanceId">实例标识。</param>
@@ -132,7 +173,7 @@ public interface IMetricsRecorder : IAsyncDisposable, IDisposable
 }
 
 /// <summary>
-/// 实例指标采集器。负责记录实例启动真实耗时、周期采样 QEMU 进程工作集内存，
+/// 实例指标采集器。负责分阶段记录实例启动耗时、周期采样 QEMU 进程工作集内存，
 /// 并在实例停止时将指标以 JSON 落盘到实例数据目录中的 metrics.json。
 /// 时间源与采样周期均可注入，确保测试可控且所有记录均为真实观测值。
 /// </summary>
@@ -154,6 +195,7 @@ public sealed class MetricsRecorder : IMetricsRecorder
     private readonly Func<string, string> _directoryResolver;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _samplingInterval;
+    private readonly IHostMemorySampler? _hostMemorySampler;
     private readonly ConcurrentDictionary<string, InstanceSession> _sessions = new(StringComparer.Ordinal);
     private int _disposed;
 
@@ -164,17 +206,22 @@ public sealed class MetricsRecorder : IMetricsRecorder
     /// <param name="timeProvider">时间提供者，缺省使用系统时间。</param>
     /// <param name="samplingInterval">内存采样周期，缺省为 1 秒。</param>
     /// <param name="directoryResolver">实例专属目录解析器，缺省为根目录下同名子目录。</param>
+    /// <param name="hostMemorySampler">
+    /// 宿主物理内存采样器，为 null 时不记录宿主内存协变量，metrics.json 中该字段整体省略。
+    /// </param>
     public MetricsRecorder(
         string instancesRoot,
         TimeProvider? timeProvider = null,
         TimeSpan? samplingInterval = null,
-        Func<string, string>? directoryResolver = null)
+        Func<string, string>? directoryResolver = null,
+        IHostMemorySampler? hostMemorySampler = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(instancesRoot);
 
         _timeProvider = timeProvider ?? TimeProvider.System;
         _samplingInterval = samplingInterval ?? DefaultSamplingInterval;
         _directoryResolver = directoryResolver ?? (id => Path.Combine(instancesRoot, id));
+        _hostMemorySampler = hostMemorySampler;
     }
 
     /// <inheritdoc />
@@ -191,14 +238,16 @@ public sealed class MetricsRecorder : IMetricsRecorder
             session.Startup = new InstanceStartupMetric
             {
                 StartedAt = _timeProvider.GetUtcNow(),
-                Success = false,
+                ProcessSpawned = false,
+                DebugChannelReady = false,
             };
+            session.HostMemory = SampleHostMemory();
             session.Samples.Clear();
         }
     }
 
     /// <inheritdoc />
-    public void OnRunning(string instanceId, QemuProcessHandle handle)
+    public void OnProcessSpawned(string instanceId, QemuProcessHandle handle)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
         ArgumentNullException.ThrowIfNull(handle);
@@ -211,14 +260,14 @@ public sealed class MetricsRecorder : IMetricsRecorder
 
             if (session.Startup is not null)
             {
-                session.Startup.ReadyAt = now;
+                session.Startup.ProcessSpawnedAt = now;
+                session.Startup.ProcessSpawned = true;
                 var elapsed = now - session.Startup.StartedAt;
-                session.Startup.DurationSeconds = Math.Max(0, elapsed.TotalSeconds);
-                session.Startup.DurationMs = Math.Max(0, elapsed.TotalMilliseconds);
-                session.Startup.Success = true;
+                session.Startup.ProcessSpawnSeconds = Math.Max(0, elapsed.TotalSeconds);
+                session.Startup.ProcessSpawnMs = Math.Max(0, elapsed.TotalMilliseconds);
             }
 
-            // 采样定时器：进入运行态即启动周期采样，并在初次调度时立即执行一次采样。
+            // 采样定时器：进程拉起即启动周期采样，并在初次调度时立即执行一次采样。
             session.Timer?.Dispose();
             if (_samplingInterval > TimeSpan.Zero)
             {
@@ -232,7 +281,52 @@ public sealed class MetricsRecorder : IMetricsRecorder
     }
 
     /// <inheritdoc />
-    public void OnStartupFailed(string instanceId)
+    public void OnDebugChannelReady(string instanceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
+
+        var session = _sessions.GetOrAdd(instanceId, id => new InstanceSession(id));
+        lock (session.Gate)
+        {
+            if (session.Startup is null)
+            {
+                return;
+            }
+
+            var now = _timeProvider.GetUtcNow();
+            session.Startup.DebugChannelReady = true;
+            session.Startup.ReadyAt = now;
+            var elapsed = now - session.Startup.StartedAt;
+            session.Startup.ColdStartSeconds = Math.Max(0, elapsed.TotalSeconds);
+            session.Startup.ColdStartMs = Math.Max(0, elapsed.TotalMilliseconds);
+        }
+    }
+
+    /// <inheritdoc />
+    public void OnDebugChannelUnavailable(string instanceId, string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        var session = _sessions.GetOrAdd(instanceId, id => new InstanceSession(id));
+        lock (session.Gate)
+        {
+            if (session.Startup is null || session.Startup.DebugChannelReady)
+            {
+                return;
+            }
+
+            // 未就绪即不产出任何冷启动耗时，readyAt 与就绪标记一并保持为空。
+            session.Startup.DebugChannelReady = false;
+            session.Startup.ReadyAt = null;
+            session.Startup.ColdStartSeconds = null;
+            session.Startup.ColdStartMs = null;
+            session.Startup.Note = reason;
+        }
+    }
+
+    /// <inheritdoc />
+    public void OnStartupFailed(string instanceId, string? reason = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
 
@@ -245,7 +339,14 @@ public sealed class MetricsRecorder : IMetricsRecorder
                 session.Handle = null;
                 if (session.Startup is not null)
                 {
-                    session.Startup.Success = false;
+                    session.Startup.DebugChannelReady = false;
+                    session.Startup.ReadyAt = null;
+                    session.Startup.ColdStartSeconds = null;
+                    session.Startup.ColdStartMs = null;
+                    if (!string.IsNullOrWhiteSpace(reason))
+                    {
+                        session.Startup.Note = reason;
+                    }
                 }
             }
         }
@@ -366,6 +467,30 @@ public sealed class MetricsRecorder : IMetricsRecorder
         return Path.Combine(_directoryResolver(instanceId), MetricsFileName);
     }
 
+    private HostMemorySample? SampleHostMemory()
+    {
+        if (_hostMemorySampler is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            HostMemorySample? sample = _hostMemorySampler.Sample();
+            if (sample is not null)
+            {
+                sample.SampledAt = _timeProvider.GetUtcNow();
+            }
+
+            return sample;
+        }
+        catch (Exception)
+        {
+            // 宿主内存是协变量而非指标主体，取不到时如实省略，不影响启动指标本身。
+            return null;
+        }
+    }
+
     private InstanceMetricsSnapshot BuildSnapshotCore(InstanceSession session)
     {
         var snapshot = new InstanceMetricsSnapshot
@@ -373,6 +498,7 @@ public sealed class MetricsRecorder : IMetricsRecorder
             InstanceId = session.InstanceId,
             RecordedAt = _timeProvider.GetUtcNow(),
             Startup = session.Startup,
+            HostMemory = session.HostMemory,
             MemorySamples = session.Samples.ToList(),
         };
 
@@ -431,6 +557,7 @@ public sealed class MetricsRecorder : IMetricsRecorder
         public string InstanceId { get; }
         public object Gate { get; } = new();
         public InstanceStartupMetric? Startup { get; set; }
+        public HostMemorySample? HostMemory { get; set; }
         public List<MemorySample> Samples { get; } = new();
         public QemuProcessHandle? Handle { get; set; }
         public ITimer? Timer { get; set; }

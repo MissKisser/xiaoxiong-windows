@@ -56,6 +56,13 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
     /// <summary>收到 shell 命令后是否故意不回包，用于验证取消。</summary>
     public bool StallShell { get; set; }
 
+    /// <summary>
+    /// 是否接受连接后故意不回应握手。
+    /// 宿主转发会在宿主侧立即接受连接，adbd 未就绪时正是这种表现，
+    /// 用于验证客户端不会在握手上永久阻塞。
+    /// </summary>
+    public bool StallHandshake { get; set; }
+
     /// <summary>客户端发出的请求负载原文。</summary>
     public IReadOnlyList<string> Requests => _requests;
 
@@ -238,6 +245,12 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
     {
         if (payload == "host:version")
         {
+            if (StallHandshake)
+            {
+                await Task.Delay(Timeout.Infinite, _cts.Token).ConfigureAwait(false);
+                return false;
+            }
+
             await WriteStatusAsync(stream, "OKAY").ConfigureAwait(false);
             await WriteVersionAsync(stream).ConfigureAwait(false);
             return true;

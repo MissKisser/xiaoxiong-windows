@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using XBear.Core.Diagnostics;
 using XBear.Core.Spec;
 
 namespace XBear.Core.Instances;
@@ -15,7 +16,7 @@ public interface IHostMemoryDetector
 /// 基于 Windows API (GlobalMemoryStatusEx) 检测物理内存。
 /// 若检测失败或非 Windows 环境则安全回退到 GC 内存信息或保底值。
 /// </summary>
-public sealed class WindowsHostMemoryDetector : IHostMemoryDetector
+public sealed class WindowsHostMemoryDetector : IHostMemoryDetector, IHostMemorySampler
 {
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
     private struct MEMORYSTATUSEX
@@ -38,6 +39,17 @@ public sealed class WindowsHostMemoryDetector : IHostMemoryDetector
     /// <inheritdoc />
     public double GetTotalPhysicalMemoryGB()
     {
+        HostMemorySample? sample = Sample();
+        return sample?.TotalPhysicalGB ?? ResolveFallbackMemoryGB();
+    }
+
+    /// <summary>
+    /// 取一次宿主物理内存采样。同时给出总量与可用量：
+    /// 可用量是判断多开冷启动数据是否可信的必要协变量。
+    /// </summary>
+    /// <returns>采样结果，非 Windows 环境或 API 调用失败时返回 null。</returns>
+    public HostMemorySample? Sample()
+    {
         try
         {
             if (OperatingSystem.IsWindows())
@@ -45,7 +57,13 @@ public sealed class WindowsHostMemoryDetector : IHostMemoryDetector
                 var stat = new MEMORYSTATUSEX { dwLength = (uint)Marshal.SizeOf<MEMORYSTATUSEX>() };
                 if (GlobalMemoryStatusEx(ref stat) && stat.ullTotalPhys > 0)
                 {
-                    return stat.ullTotalPhys / (1024.0 * 1024.0 * 1024.0);
+                    return new HostMemorySample
+                    {
+                        TotalPhysicalBytes = (long)Math.Min(stat.ullTotalPhys, long.MaxValue),
+                        AvailablePhysicalBytes = (long)Math.Min(stat.ullAvailPhys, long.MaxValue),
+                        TotalPhysicalGB = stat.ullTotalPhys / (1024.0 * 1024.0 * 1024.0),
+                        AvailablePhysicalGB = stat.ullAvailPhys / (1024.0 * 1024.0 * 1024.0),
+                    };
                 }
             }
         }
@@ -54,13 +72,13 @@ public sealed class WindowsHostMemoryDetector : IHostMemoryDetector
             // P/Invoke 失败时回退
         }
 
-        long availableBytes = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
-        if (availableBytes > 0)
-        {
-            return availableBytes / (1024.0 * 1024.0 * 1024.0);
-        }
+        return null;
+    }
 
-        return 16.0;
+    private static double ResolveFallbackMemoryGB()
+    {
+        long availableBytes = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+        return availableBytes > 0 ? availableBytes / (1024.0 * 1024.0 * 1024.0) : 16.0;
     }
 }
 

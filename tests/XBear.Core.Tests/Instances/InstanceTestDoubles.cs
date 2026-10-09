@@ -79,17 +79,26 @@ internal sealed class FakeQemuArgBuilder : IQemuArgBuilder
     /// <summary>最近一次使用的端口组，尚未生成时为空端口。</summary>
     public AllocatedPorts LastPorts { get; private set; } = new(0, 0, 0);
 
+    /// <summary>最近一次收到的镜像清单，尚未生成时为空。</summary>
+    public ImageSpec? LastImage { get; private set; }
+
     /// <summary>
     /// 生成固定的参数序列。
     /// </summary>
     /// <param name="spec">实例配置。</param>
+    /// <param name="image">实例引用的镜像清单。</param>
     /// <param name="diskPath">可写磁盘镜像路径。</param>
     /// <param name="ports">端口组。</param>
     /// <returns>参数序列。</returns>
-    public IReadOnlyList<string> BuildStartArguments(InstanceSpec spec, string diskPath, AllocatedPorts ports)
+    public IReadOnlyList<string> BuildStartArguments(
+        InstanceSpec spec,
+        ImageSpec? image,
+        string diskPath,
+        AllocatedPorts ports)
     {
         LastDiskPath = diskPath;
         LastPorts = ports;
+        LastImage = image;
         LastArguments = new[] { "-machine", "q35", "-m", spec.Resources.MemoryMB.ToString(), "-qmp", $"tcp:127.0.0.1:{ports.Qmp}" };
         return LastArguments;
     }
@@ -165,19 +174,27 @@ internal sealed class FakeQemuLauncher : IQemuLauncher
     /// <summary>启动失败时抛出。</summary>
     public Exception? StartFailure { get; set; }
 
+    /// <summary>拉起成功时的回调，可用于在进程创建完成后推进假时钟。</summary>
+    public Action? OnStart { get; set; }
+
     /// <summary>最近一次启动使用的端口组，尚未启动时为空端口。</summary>
     public AllocatedPorts LastPorts { get; private set; } = new(0, 0, 0);
+
+    /// <summary>最近一次收到的镜像清单，尚未启动时为空。</summary>
+    public ImageSpec? LastImage { get; private set; }
 
     /// <summary>
     /// 返回一个进程句柄，或抛出预设的失败。
     /// </summary>
     /// <param name="spec">实例配置。</param>
+    /// <param name="image">实例引用的镜像清单。</param>
     /// <param name="diskPath">可写磁盘镜像路径。</param>
     /// <param name="ports">端口组。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>进程句柄。</returns>
     public Task<QemuProcessHandle> StartAsync(
         InstanceSpec spec,
+        ImageSpec? image,
         string diskPath,
         AllocatedPorts ports,
         CancellationToken cancellationToken = default)
@@ -188,9 +205,11 @@ internal sealed class FakeQemuLauncher : IQemuLauncher
         }
 
         LastPorts = ports;
+        LastImage = image;
         var handle = new FakeQemuProcessHandle();
         Started.Add(handle);
         _sequence++;
+        OnStart?.Invoke();
         return Task.FromResult<QemuProcessHandle>(handle);
     }
 
@@ -319,7 +338,7 @@ internal sealed class FakeTimeProvider : TimeProvider
 }
 
 /// <summary>假宿主内存检测器，供测试模拟任意宿主物理内存容量。</summary>
-internal sealed class FakeHostMemoryDetector : IHostMemoryDetector
+internal sealed class FakeHostMemoryDetector : IHostMemoryDetector, IHostMemorySampler
 {
     public double MemoryGB { get; set; }
 
@@ -328,5 +347,73 @@ internal sealed class FakeHostMemoryDetector : IHostMemoryDetector
         MemoryGB = memoryGB;
     }
 
+    /// <summary>可用物理内存（GB），未显式设置时按总量的一半模拟。</summary>
+    public double AvailableMemoryGB { get; set; } = double.NaN;
+
+    /// <summary>采样次数，用于断言指标确实采到了宿主内存协变量。</summary>
+    public int SampleCount { get; private set; }
+
     public double GetTotalPhysicalMemoryGB() => MemoryGB;
+
+    public HostMemorySample? Sample()
+    {
+        SampleCount++;
+        double available = double.IsNaN(AvailableMemoryGB) ? MemoryGB / 2.0 : AvailableMemoryGB;
+        return new HostMemorySample
+        {
+            TotalPhysicalBytes = (long)(MemoryGB * 1024 * 1024 * 1024),
+            AvailablePhysicalBytes = (long)(available * 1024 * 1024 * 1024),
+            TotalPhysicalGB = MemoryGB,
+            AvailablePhysicalGB = available,
+        };
+    }
+}
+
+/// <summary>adb 客户端替身，供生命周期测试控制调试通路就绪探测的结果。</summary>
+internal sealed class FakeAdbClient : IAdbClient
+{
+    /// <summary>连接时抛出的异常，置空表示连接成功。</summary>
+    public Exception? ConnectFailure { get; set; }
+
+    /// <summary>连接回调，入参为目标端口，可用于在探测期间推进假时钟。</summary>
+    public Action<int>? OnConnect { get; set; }
+
+    /// <summary>连接尝试次数。</summary>
+    public int ConnectCount { get; private set; }
+
+    /// <summary>最近一次连接收到的等待上限，尚未连接时为空。</summary>
+    public TimeSpan? LastTimeout { get; private set; }
+
+    /// <summary>
+    /// 记录一次连接尝试。
+    /// </summary>
+    /// <param name="port">adb 端口。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <param name="timeout">本次连接等待上限。</param>
+    /// <returns>协议版本。</returns>
+    public Task<int> ConnectAsync(int port, CancellationToken cancellationToken = default, TimeSpan? timeout = null)
+    {
+        ConnectCount++;
+        LastTimeout = timeout;
+        OnConnect?.Invoke(port);
+        return ConnectFailure is not null ? throw ConnectFailure : Task.FromResult(41);
+    }
+
+    /// <inheritdoc />
+    public Task<string> ShellAsync(string command, CancellationToken cancellationToken = default) =>
+        Task.FromResult(string.Empty);
+
+    /// <inheritdoc />
+    public Task<bool> IsRootAsync(CancellationToken cancellationToken = default) => Task.FromResult(true);
+
+    /// <inheritdoc />
+    public Task PushAsync(string localPath, string remotePath, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task PullAsync(string remotePath, string localPath, CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
+
+    /// <inheritdoc />
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

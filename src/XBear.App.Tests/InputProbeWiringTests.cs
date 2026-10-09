@@ -62,8 +62,9 @@ public class InputProbeWiringTests : IDisposable
             _temp.NewImagesRootWithBaseImage(ImageRef),
             _temp.New("instances"),
             validator,
-            () => qmp,
-            () => adb);
+            imageCatalog: null,
+            qmpClientFactory: () => qmp,
+            adbClientFactory: () => adb);
 
         _managers.Add(manager);
         return manager;
@@ -213,6 +214,7 @@ public class InputProbeWiringTests : IDisposable
             imagesRoot,
             instancesRoot,
             null,
+            imageCatalog: null,
             () => firstQmp,
             () => firstAdb);
         _managers.Add(manager);
@@ -276,6 +278,7 @@ public class InputProbeWiringTests : IDisposable
             _temp.NewImagesRootWithBaseImage(ImageRef),
             _temp.New("instances"),
             null,
+            imageCatalog: null,
             () => newQmp(),
             () => newAdb());
 
@@ -315,6 +318,7 @@ public class InputProbeWiringTests : IDisposable
             _temp.NewImagesRootWithBaseImage(ImageRef),
             _temp.New("instances"),
             null,
+            imageCatalog: null,
             () => qmp,
             () => adb);
         _managers.Add(manager);

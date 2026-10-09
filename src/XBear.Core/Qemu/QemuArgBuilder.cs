@@ -7,7 +7,15 @@ using XBear.Core.Spec;
 
 namespace XBear.Core.Qemu;
 
-/// <summary>按实例配置生成 QEMU 启动参数，不接触文件系统与进程。</summary>
+/// <summary>
+/// 按实例配置生成 QEMU 启动参数，不接触文件系统与进程。
+/// </summary>
+/// <remarks>
+/// 默认走磁盘引导：启动盘以 if=none 挂到 virtio-scsi 控制器上供固件引导，
+/// 该模式没有 -kernel，QEMU 会拒绝任何 -append，因此设备标识经 DMI 下发序列号，
+/// 镜像保真度相关的 androidboot 参数不在该模式下产出。
+/// 实例在 platformConfig 中显式声明 kernelImage 时才切换为内核引导模式。
+/// </remarks>
 public sealed class QemuArgBuilder : IQemuArgBuilder
 {
     /// <summary>回环暴露对应的宿主绑定地址。</summary>
@@ -34,8 +42,57 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
     /// <summary>实例未声明 CPU 型号时使用的缺省型号，直接透传宿主 CPU 能力。</summary>
     public const string DefaultCpuModel = "host";
 
+    /// <summary>启动盘在 -drive 上的 drive 标识，供 -device scsi-hd 引用。</summary>
+    public const string SystemDriveId = "xbsysdisk";
+
+    /// <summary>virtio-scsi 控制器的设备标识。</summary>
+    public const string ScsiControllerId = "xbscsi";
+
+    /// <summary>platformConfig 中声明加速器名称的键名。</summary>
+    public const string AcceleratorConfigKey = "accelerator";
+
+    /// <summary>platformConfig 中声明加速器附加选项的键名。</summary>
+    public const string AcceleratorOptionsConfigKey = "acceleratorOptions";
+
+    /// <summary>platformConfig 中声明内核镜像路径的键名。</summary>
+    public const string KernelImageConfigKey = "kernelImage";
+
+    /// <summary>platformConfig 中声明初始 ramdisk 镜像路径的键名。</summary>
+    public const string InitrdImageConfigKey = "initrdImage";
+
+    /// <summary>platformConfig 中声明内核命令行骨架的键名。</summary>
+    public const string KernelAppendConfigKey = "kernelAppend";
+
+    /// <summary>
+    /// 未声明 kernelAppend 时使用的安全默认命令行骨架。
+    /// 缺 nomodeset 会退化为无显示输出，缺 root 参数则无法挂载根文件系统，两者都是引导失败。
+    /// </summary>
+    public const string DefaultKernelAppendSkeleton = "root=/dev/ram0 quiet nomodeset";
+
     private const string NetworkDeviceId = "net0";
     private const string QemuUserNetPrefix = "user";
+
+    private readonly AcceleratorOptions _accelerator;
+
+    /// <summary>
+    /// 构造参数生成器，使用宿主级默认加速器参数。
+    /// </summary>
+    public QemuArgBuilder()
+        : this(null)
+    {
+    }
+
+    /// <summary>
+    /// 构造参数生成器并指定宿主级加速器参数。
+    /// </summary>
+    /// <param name="accelerator">
+    /// 宿主级加速器参数，为 null 时使用 <see cref="AcceleratorOptions.Default"/>。
+    /// 实例可通过 platformConfig 覆盖，但只能改名称与附加选项，无法退回更危险的缺省行为。
+    /// </param>
+    public QemuArgBuilder(AcceleratorOptions? accelerator)
+    {
+        _accelerator = accelerator ?? AcceleratorOptions.Default;
+    }
 
     /// <summary>CPU 型号允许的字符集，避免取值被拆成额外的 QEMU 参数。</summary>
     private static readonly Regex CpuModelPattern =
@@ -108,7 +165,7 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         var arguments = new List<string>
         {
             "-accel",
-            "whpx",
+            ResolveAccelerator(spec),
             "-cpu",
             ResolveCpuModel(spec),
             "-smp",
@@ -116,7 +173,11 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
             "-m",
             spec.Resources.MemoryMB.ToString(CultureInfo.InvariantCulture),
             "-drive",
-            $"file={EscapeOptionValue(diskPath)},if=virtio,format=qcow2",
+            $"file={EscapeOptionValue(diskPath)},if=none,id={SystemDriveId},format=qcow2",
+            "-device",
+            $"virtio-scsi-pci,id={ScsiControllerId}",
+            "-device",
+            $"scsi-hd,drive={SystemDriveId},bus={ScsiControllerId}.0",
             "-boot",
             "menu=off",
             "-no-reboot",
@@ -128,16 +189,15 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
             BuildVncDisplay(spec.Network?.Exposure, ports.Vnc),
         };
 
-        // 引导命令行没有可下发的内容时整条省略，保持既有启动参数与不携带标识的旧实例完全一致。
-        var kernelCommandLine = KernelCommandLine.Build(
-            spec.DeviceIdentity,
-            image?.Verified?.Fidelity.P2SystemWrite ?? VerificationState.Untested);
-
-        if (kernelCommandLine.Length > 0)
+        // 磁盘引导没有 -kernel，QEMU 会在启动前直接拒绝 -append，因此标识只经 DMI 下发序列号。
+        string? smbiosSerial = DeviceIdentityChannels.BuildSmbiosSerialEntry(spec.DeviceIdentity);
+        if (smbiosSerial is not null)
         {
-            arguments.Add("-append");
-            arguments.Add(kernelCommandLine);
+            arguments.Add("-smbios");
+            arguments.Add(smbiosSerial);
         }
+
+        AppendKernelBootArguments(spec, image, arguments);
 
         arguments.Add("-netdev");
         arguments.Add(BuildNetDev(spec.Network, ports.Adb));
@@ -152,6 +212,156 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         }
 
         return arguments;
+    }
+
+    /// <summary>
+    /// 追加内核引导模式相关参数。只有显式配置了内核镜像时才下发 -kernel，
+    /// -initrd 与 -append 同属内核引导参数，
+    /// 未配置内核镜像时一律省略，否则 QEMU 会以「-append only allowed with -kernel option」拒绝启动。
+    /// -append 的合成顺序为 {kernelAppend 骨架} + {KernelCommandLine 的标识与保真度片段}。
+    /// 未声明 kernelAppend 时给出安全默认骨架（至少含 nomodeset 与可引导的 root 参数）。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <param name="image">实例引用的镜像清单，可为空。</param>
+    /// <param name="arguments">待追加的参数序列。</param>
+    private void AppendKernelBootArguments(
+        InstanceSpec spec,
+        ImageSpec? image,
+        List<string> arguments)
+    {
+        string? kernelImage = ResolveKernelImagePath(spec);
+        if (string.IsNullOrWhiteSpace(kernelImage))
+        {
+            return;
+        }
+
+        arguments.Add("-kernel");
+        arguments.Add(kernelImage);
+
+        string? initrdImage = ResolveInitrdImagePath(spec);
+        if (!string.IsNullOrWhiteSpace(initrdImage))
+        {
+            arguments.Add("-initrd");
+            arguments.Add(initrdImage);
+        }
+
+        string skeleton = ResolveKernelAppendSkeleton(spec);
+        var dynamicCommandLine = KernelCommandLine.Build(
+            spec.DeviceIdentity,
+            image?.Verified?.Fidelity.P2SystemWrite ?? VerificationState.Untested);
+
+        var append = KernelCommandLine.Compose(new[] { skeleton, dynamicCommandLine });
+        if (append.Length > 0)
+        {
+            arguments.Add("-append");
+            arguments.Add(append);
+        }
+    }
+
+    /// <summary>
+    /// 解析 -accel 取值。实例在 platformConfig 中显式声明时覆盖宿主级参数；
+    /// 未声明时使用宿主级参数，其缺省为 WHPX 且关闭内核 irqchip 直通。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>-accel 参数值。</returns>
+    /// <exception cref="XBearException">声明含非法字符时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    private string ResolveAccelerator(InstanceSpec spec)
+    {
+        var platform = spec.PlatformConfig;
+
+        string accelerator = platform?.Accelerator is { } declaredAccelerator
+            ? declaredAccelerator.Trim()
+            : _accelerator.Accelerator;
+
+        if (!AcceleratorOptions.IsValidAcceleratorName(accelerator))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"实例 {spec.Id} 声明的加速器 {accelerator} 非法。",
+                $"platformConfig.{AcceleratorConfigKey} 只允许加速器名称，允许的字符为字母、数字、下划线、点与连字符。");
+        }
+
+        // 实例显式声明附加选项时整条替换（含显式置空），未声明时沿用宿主级缺省。
+        string? options = platform?.AcceleratorOptions is { } declaredOptions
+            ? declaredOptions.Trim()
+            : _accelerator.Options;
+
+        if (!AcceleratorOptions.IsValidOptions(options))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"实例 {spec.Id} 声明的加速器选项 {options} 非法。",
+                $"platformConfig.{AcceleratorOptionsConfigKey} 只允许 key=value 序列，允许的字符为字母、数字、下划线、点、连字符、逗号与等号。");
+        }
+
+        return string.IsNullOrWhiteSpace(options)
+            ? accelerator
+            : $"{accelerator},{options}";
+    }
+
+    /// <summary>
+    /// 解析内核引导模式使用的内核镜像路径，未声明时返回 null 表示走磁盘引导。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>内核镜像路径，未声明时返回 null。</returns>
+    /// <exception cref="XBearException">声明含非法字符时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    private static string? ResolveKernelImagePath(InstanceSpec spec)
+    {
+        var declared = spec.PlatformConfig?.KernelImage;
+        if (string.IsNullOrWhiteSpace(declared))
+        {
+            return null;
+        }
+
+        string kernelImage = declared.Trim();
+        if (kernelImage.Any(static c => char.IsWhiteSpace(c) || c is '"'))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"实例 {spec.Id} 声明的内核镜像路径 {kernelImage} 非法。",
+                $"platformConfig.{KernelImageConfigKey} 必须是可直达的镜像文件路径，且不得含空白或引号。");
+        }
+
+        return kernelImage;
+    }
+
+    /// <summary>
+    /// 解析内核引导模式使用的初始 ramdisk 路径，未声明时返回 null。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>初始 ramdisk 路径，未声明时返回 null。</returns>
+    /// <exception cref="XBearException">声明含非法字符时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    private static string? ResolveInitrdImagePath(InstanceSpec spec)
+    {
+        var declared = spec.PlatformConfig?.InitrdImage;
+        if (string.IsNullOrWhiteSpace(declared))
+        {
+            return null;
+        }
+
+        string initrdImage = declared.Trim();
+        if (initrdImage.Any(static c => char.IsWhiteSpace(c) || c is '"'))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"实例 {spec.Id} 声明的初始 ramdisk 路径 {initrdImage} 非法。",
+                $"platformConfig.{InitrdImageConfigKey} 必须是可直达的镜像文件路径，且不得含空白或引号。");
+        }
+
+        return initrdImage;
+    }
+
+    /// <summary>
+    /// 解析内核引导命令行骨架。显式声明时以声明值为准（含显式置空），
+    /// 未声明时回退到安全默认骨架，避免实例因缺省骨架而引导失败。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>内核命令行骨架，未声明时返回默认骨架，显式置空时返回空串。</returns>
+    private static string ResolveKernelAppendSkeleton(InstanceSpec spec)
+    {
+        var declared = spec.PlatformConfig?.KernelAppend;
+
+        return declared is null ? DefaultKernelAppendSkeleton : declared.Trim();
     }
 
     /// <summary>

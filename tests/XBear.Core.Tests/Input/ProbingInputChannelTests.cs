@@ -102,8 +102,9 @@ internal sealed class StubAdbClient : IAdbClient
     /// </summary>
     /// <param name="port">adb 端口。</param>
     /// <param name="cancellationToken">取消令牌。</param>
+    /// <param name="timeout">本次连接等待上限。</param>
     /// <returns>协议版本 41。</returns>
-    public Task<int> ConnectAsync(int port, CancellationToken cancellationToken = default)
+    public Task<int> ConnectAsync(int port, CancellationToken cancellationToken = default, TimeSpan? timeout = null)
     {
         if (ConnectFailure is not null)
         {

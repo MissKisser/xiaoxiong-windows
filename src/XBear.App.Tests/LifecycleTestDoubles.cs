@@ -69,16 +69,25 @@ internal sealed class StubArgBuilder : IQemuArgBuilder
     /// <summary>最近一次使用的端口组。</summary>
     public AllocatedPorts LastPorts { get; private set; } = new(0, 0, 0);
 
+    /// <summary>最近一次收到的镜像清单，尚未生成时为空。</summary>
+    public ImageSpec? LastImage { get; private set; }
+
     /// <summary>
     /// 生成固定参数。
     /// </summary>
     /// <param name="spec">实例配置。</param>
+    /// <param name="image">实例引用的镜像清单。</param>
     /// <param name="diskPath">可写磁盘镜像路径。</param>
     /// <param name="ports">端口组。</param>
     /// <returns>参数序列。</returns>
-    public IReadOnlyList<string> BuildStartArguments(InstanceSpec spec, string diskPath, AllocatedPorts ports)
+    public IReadOnlyList<string> BuildStartArguments(
+        InstanceSpec spec,
+        ImageSpec? image,
+        string diskPath,
+        AllocatedPorts ports)
     {
         LastPorts = ports;
+        LastImage = image;
         return new[] { "-machine", "q35" };
     }
 }
@@ -139,16 +148,21 @@ internal sealed class StubQemuLauncher : IQemuLauncher
     /// <summary>启动失败时抛出。</summary>
     public Exception? StartFailure { get; set; }
 
+    /// <summary>最近一次收到的镜像清单，尚未启动时为空。</summary>
+    public ImageSpec? LastImage { get; private set; }
+
     /// <summary>
     /// 返回一个进程句柄。
     /// </summary>
     /// <param name="spec">实例配置。</param>
-    /// <param name="diskPath">可写磁盘镜像路径。</param>
+    /// <param name="image">实例引用的镜像清单。</param>
+    /// <param name="diskPath">实例可写磁盘镜像路径。</param>
     /// <param name="ports">端口组。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>进程句柄。</returns>
     public Task<QemuProcessHandle> StartAsync(
         InstanceSpec spec,
+        ImageSpec? image,
         string diskPath,
         AllocatedPorts ports,
         CancellationToken cancellationToken = default)
@@ -158,6 +172,7 @@ internal sealed class StubQemuLauncher : IQemuLauncher
             throw StartFailure;
         }
 
+        LastImage = image;
         var handle = new StubQemuProcessHandle();
         Started.Add(handle);
         return Task.FromResult<QemuProcessHandle>(handle);
@@ -379,13 +394,14 @@ internal sealed class StubAdbClient : IAdbClient
     /// <summary>释放次数。</summary>
     public int DisposeCount { get; private set; }
 
-    /// <summary>
+/// <summary>
     /// 记录一次连接。
     /// </summary>
-    /// <param name="port">adb 宿主端口。</param>
+    /// <param name="port">adb 端口。</param>
     /// <param name="cancellationToken">取消令牌。</param>
+    /// <param name="timeout">本次连接等待上限。</param>
     /// <returns>协议版本。</returns>
-    public Task<int> ConnectAsync(int port, CancellationToken cancellationToken = default)
+    public Task<int> ConnectAsync(int port, CancellationToken cancellationToken = default, TimeSpan? timeout = null)
     {
         LastConnectPort = port;
         ConnectCount++;

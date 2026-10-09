@@ -44,8 +44,9 @@ public class MainViewModelInputProbeTests : IDisposable
             _temp.NewImagesRootWithBaseImage(ImageRef),
             _temp.New("instances"),
             validator,
-            () => qmp,
-            () => adb);
+            imageCatalog: null,
+            qmpClientFactory: () => qmp,
+            adbClientFactory: () => adb);
 
         return manager;
     }

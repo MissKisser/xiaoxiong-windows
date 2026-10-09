@@ -7,10 +7,12 @@ public interface IQemuArgBuilder
 {
     /// <summary>生成启动参数序列，不含可执行文件路径。</summary>
     /// <param name="spec">实例配置。</param>
+    /// <param name="image">实例引用的镜像清单，可为空，空值不下发镜像保真度相关引导参数。</param>
     /// <param name="diskPath">实例可写磁盘镜像路径。</param>
     /// <param name="ports">本次分配到的宿主端口。</param>
     IReadOnlyList<string> BuildStartArguments(
         InstanceSpec spec,
+        ImageSpec? image,
         string diskPath,
         AllocatedPorts ports);
 }
@@ -20,11 +22,13 @@ public interface IQemuLauncher
 {
     /// <summary>启动实例进程并开始捕获日志。</summary>
     /// <param name="spec">实例配置。</param>
+    /// <param name="image">实例引用的镜像清单，可为空，空值不下发镜像保真度相关引导参数。</param>
     /// <param name="diskPath">实例可写磁盘镜像路径。</param>
     /// <param name="ports">本次分配到的宿主端口。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     Task<QemuProcessHandle> StartAsync(
         InstanceSpec spec,
+        ImageSpec? image,
         string diskPath,
         AllocatedPorts ports,
         CancellationToken cancellationToken = default);

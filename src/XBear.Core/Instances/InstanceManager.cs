@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text.Json;
 using XBear.Core.Abstractions;
 using XBear.Core.Adb;
@@ -42,6 +43,15 @@ public sealed class InstanceStateChangedEventArgs : EventArgs
 /// </summary>
 public sealed class InstanceManager
 {
+    /// <summary>调试通路就绪探测的默认等待上限，覆盖实测的冷启动量级。</summary>
+    public static readonly TimeSpan DefaultDebugChannelProbeTimeout = TimeSpan.FromSeconds(120);
+
+    /// <summary>调试通路就绪探测的重试间隔。</summary>
+    public static readonly TimeSpan DefaultDebugChannelProbeInterval = TimeSpan.FromSeconds(2);
+
+    /// <summary>单次 adb 连接尝试的等待上限。</summary>
+    public static readonly TimeSpan DefaultDebugChannelAttemptTimeout = TimeSpan.FromSeconds(5);
+
     private readonly IInstanceRepository _repository;
     private readonly IPortAllocator _portAllocator;
     private readonly IQemuArgBuilder _argBuilder;
@@ -50,10 +60,14 @@ public sealed class InstanceManager
     private readonly string _imagesRoot;
     private readonly string _instancesRoot;
     private readonly Spec.SpecValidator? _specValidator;
+    private readonly IImageCatalog? _imageCatalog;
     private readonly Func<IQmpClient> _qmpClientFactory;
     private readonly Func<IAdbClient> _adbClientFactory;
     private readonly IMetricsRecorder _metricsRecorder;
     private readonly IDensityAdvisor _densityAdvisor;
+    private readonly TimeSpan _debugChannelProbeTimeout;
+    private readonly TimeSpan _debugChannelProbeInterval;
+    private readonly TimeSpan _debugChannelAttemptTimeout;
 
     private readonly ConcurrentDictionary<string, InstanceState> _states = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AllocatedPorts> _allocatedPorts = new(StringComparer.Ordinal);
@@ -74,6 +88,9 @@ public sealed class InstanceManager
     /// <param name="specValidator">
     /// 实例配置的 Schema 校验器，为 null 时跳过启动前校验。
     /// </param>
+    /// <param name="imageCatalog">
+    /// 镜像清单目录，为 null 时按镜像未知处理，不下发镜像保真度相关引导参数。
+    /// </param>
     /// <param name="qmpClientFactory">
     /// QMP 客户端工厂，缺省时按实例端口新建客户端。
     /// </param>
@@ -81,11 +98,17 @@ public sealed class InstanceManager
     /// adb 客户端工厂，缺省时按实例端口新建客户端。
     /// </param>
     /// <param name="metricsRecorder">
-    /// 指标采集器，缺省时按实例根目录新建采集器。
+    /// 指标采集器，缺省时按实例根目录新建采集器并接入宿主内存采样。
     /// </param>
     /// <param name="densityAdvisor">
     /// 多开密度顾问，缺省时按系统宿主内存与性能基线契约新建。
     /// </param>
+    /// <param name="debugChannelProbeTimeout">
+    /// 调试通路就绪探测的等待上限。为 <see cref="TimeSpan.Zero"/> 时不启用探测，
+    /// 此时 metrics.json 如实把就绪时间点留空，组合根按生产配置显式传入。
+    /// </param>
+    /// <param name="debugChannelProbeInterval">调试通路就绪探测的重试间隔。</param>
+    /// <param name="debugChannelAttemptTimeout">单次 adb 连接尝试的等待上限。</param>
     public InstanceManager(
         IInstanceRepository repository,
         IPortAllocator portAllocator,
@@ -95,10 +118,14 @@ public sealed class InstanceManager
         string imagesRoot,
         string instancesRoot,
         Spec.SpecValidator? specValidator = null,
+        IImageCatalog? imageCatalog = null,
         Func<IQmpClient>? qmpClientFactory = null,
         Func<IAdbClient>? adbClientFactory = null,
         IMetricsRecorder? metricsRecorder = null,
-        IDensityAdvisor? densityAdvisor = null)
+        IDensityAdvisor? densityAdvisor = null,
+        TimeSpan? debugChannelProbeTimeout = null,
+        TimeSpan? debugChannelProbeInterval = null,
+        TimeSpan? debugChannelAttemptTimeout = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(portAllocator);
@@ -116,10 +143,19 @@ public sealed class InstanceManager
         _imagesRoot = imagesRoot;
         _instancesRoot = instancesRoot;
         _specValidator = specValidator;
+        _imageCatalog = imageCatalog;
         _qmpClientFactory = qmpClientFactory ?? (static () => new QmpClient());
         _adbClientFactory = adbClientFactory ?? (static () => new AdbClient());
-        _metricsRecorder = metricsRecorder ?? new MetricsRecorder(instancesRoot);
+        _metricsRecorder = metricsRecorder ??
+            new MetricsRecorder(instancesRoot, hostMemorySampler: new WindowsHostMemoryDetector());
         _densityAdvisor = densityAdvisor ?? new InstanceDensityAdvisor();
+        _debugChannelProbeTimeout = debugChannelProbeTimeout ?? TimeSpan.Zero;
+        _debugChannelProbeInterval = debugChannelProbeInterval > TimeSpan.Zero
+            ? debugChannelProbeInterval.Value
+            : DefaultDebugChannelProbeInterval;
+        _debugChannelAttemptTimeout = debugChannelAttemptTimeout > TimeSpan.Zero
+            ? debugChannelAttemptTimeout.Value
+            : DefaultDebugChannelAttemptTimeout;
     }
 
     /// <summary>指标采集器。</summary>
@@ -329,6 +365,7 @@ public sealed class InstanceManager
         try
         {
             Spec.InstanceSpec spec = await LoadSpecAsync(instanceId, cancellationToken).ConfigureAwait(false);
+            Spec.ImageSpec? image = ResolveImageSpec(spec.ImageRef);
             string baseImagePath = ResolveBaseImagePath(spec.ImageRef);
             string overlayPath = await EnsureOverlayAsync(instanceId, baseImagePath, spec.ImageRef, cancellationToken)
                 .ConfigureAwait(false);
@@ -336,12 +373,27 @@ public sealed class InstanceManager
             allocated = await _portAllocator.AcquireAsync(instanceId, cancellationToken).ConfigureAwait(false);
             _allocatedPorts[instanceId] = allocated;
 
-            IReadOnlyList<string> arguments = _argBuilder.BuildStartArguments(spec, overlayPath, allocated);
-            handle = await _launcher.StartAsync(spec, overlayPath, allocated, cancellationToken).ConfigureAwait(false);
+            IReadOnlyList<string> arguments =
+                _argBuilder.BuildStartArguments(spec, image, overlayPath, allocated);
+            handle = await _launcher.StartAsync(spec, image, overlayPath, allocated, cancellationToken)
+                .ConfigureAwait(false);
             _handles[instanceId] = handle;
 
+            // 进程拉起与调试通路就绪是两个量级相差一个数量级以上的阶段，
+            // 指标按阶段分开记录，不把进程创建耗时冒充冷启动耗时。
+            _metricsRecorder.OnProcessSpawned(instanceId, handle);
             SetState(instanceId, InstanceState.Running);
-            _metricsRecorder.OnRunning(instanceId, handle);
+
+            string? unavailableReason = await WaitForDebugChannelAsync(allocated.Adb, cancellationToken)
+                .ConfigureAwait(false);
+            if (unavailableReason is null)
+            {
+                _metricsRecorder.OnDebugChannelReady(instanceId);
+            }
+            else
+            {
+                _metricsRecorder.OnDebugChannelUnavailable(instanceId, unavailableReason);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -486,6 +538,82 @@ public sealed class InstanceManager
         Path.IsPathRooted(imageRef)
             ? imageRef
             : Path.Combine(_imagesRoot, imageRef + ".qcow2");
+
+    /// <summary>
+    /// 按镜像引用解析镜像清单。目录缺失或引用对不上时返回 null，
+    /// 调用方据此按镜像未知处理，不臆测任何保真度结论。
+    /// </summary>
+    /// <param name="imageRef">实例配置中的镜像引用。</param>
+    /// <returns>镜像清单，未登记时返回 null。</returns>
+    private Spec.ImageSpec? ResolveImageSpec(string imageRef)
+        => _imageCatalog is null ? null : _imageCatalog.Find(imageRef);
+
+    /// <summary>
+    /// 探测调试通路何时就绪。冷启动耗时以 adb 通路可连接为终点，
+    /// 未启用探测、探测超时或探测被取消时如实返回原因，由调用方把就绪时间点留空。
+    /// </summary>
+    /// <param name="adbPort">该实例分配到的宿主 adb 端口。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>就绪时返回 null，否则返回未就绪的原因。</returns>
+    private async Task<string?> WaitForDebugChannelAsync(int adbPort, CancellationToken cancellationToken)
+    {
+        if (_debugChannelProbeTimeout <= TimeSpan.Zero)
+        {
+            return "本轮启动未配置调试通路就绪探测，冷启动耗时未采集。";
+        }
+
+        var elapsed = Stopwatch.StartNew();
+        int attempts = 0;
+        while (true)
+        {
+            attempts++;
+            if (await TryDebugChannelHandshakeAsync(adbPort, cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            if (elapsed.Elapsed >= _debugChannelProbeTimeout)
+            {
+                return $"调试通路在 {_debugChannelProbeTimeout.TotalSeconds:F0} 秒内未就绪，共尝试 {attempts} 次。";
+            }
+
+            try
+            {
+                await Task.Delay(_debugChannelProbeInterval, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // 探测被取消时进程已经在运行，如实记为未就绪，不把已在跑的实例拆掉。
+                return "调试通路就绪探测被取消，冷启动耗时未采集。";
+            }
+        }
+    }
+
+    /// <summary>
+    /// 尝试一次 adb 连接握手。hostfwd 在宿主侧立即接受连接，
+    /// 因此每次尝试都必须带等待上限，adbd 未就绪时按失败处理而不是挂死。
+    /// </summary>
+    /// <param name="adbPort">该实例分配到的宿主 adb 端口。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>握手成功时返回 true。</returns>
+    private async Task<bool> TryDebugChannelHandshakeAsync(int adbPort, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using IAdbClient client = _adbClientFactory();
+            await client.ConnectAsync(adbPort, cancellationToken, _debugChannelAttemptTimeout)
+                .ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
 
     private async Task<string> EnsureOverlayAsync(
         string instanceId,

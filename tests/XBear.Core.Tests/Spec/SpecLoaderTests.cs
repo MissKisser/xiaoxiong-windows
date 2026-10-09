@@ -419,18 +419,23 @@ public class BaselineContractTests
     }
 
     /// <summary>
-    /// 实测列在取得可复核的实测值之前保持 null，
-    /// 不得用 0 或默认值占位，也不得由目标门限推导。
+    /// 实测列只装真实测量：没有测量依据的指标必须保持 null 并写明 blockedBy，
+    /// 已回填实测值的指标不得用 0 或默认值占位，也不得同时挂受阻话术。
     /// </summary>
     [Fact]
-    public void MeasuredColumnStaysNullUntilRealMeasurement()
+    public void MeasuredColumnOnlyHoldsRealMeasurements()
     {
         var baseline = SpecTestHost.Loader.LoadBaseline();
 
-        Assert.True(baseline.IsTargetsOnly());
-        Assert.All(baseline.Metrics, m => Assert.False(m.IsMeasured()));
-        Assert.All(baseline.Metrics, m => Assert.Null(m.MeasuredMeetsTarget()));
-        Assert.Equal(baseline.Metrics.Count, baseline.PendingMetrics().Count);
+        Assert.All(baseline.Metrics, m => Assert.True(
+            m.IsMeasured() != m.IsBlocked(),
+            $"指标 {m.Id} 的 measured 与 blockedBy 必须互斥"));
+        Assert.All(
+            baseline.BlockedMetrics(),
+            m => Assert.Null(m.MeasuredMeetsTarget()));
+        Assert.Equal(
+            baseline.Metrics.Count(m => !m.IsMeasured()),
+            baseline.PendingMetrics().Count);
     }
 
     [Fact]

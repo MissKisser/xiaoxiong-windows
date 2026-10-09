@@ -19,8 +19,16 @@ public sealed class AdbClient : IAdbClient
     private const int MaxShellOutputBytes = 8 * 1024 * 1024;
     private const uint DefaultFileMode = 0x1A4;
 
+    /// <summary>
+    /// 连接与握手的默认等待上限。
+    /// hostfwd 在宿主侧立即接受连接，adbd 未就绪时不会主动断开，
+    /// 不设上限会让调用方永久阻塞，因此连接与握手必须在有限时间内给出结论。
+    /// </summary>
+    public static readonly TimeSpan DefaultConnectTimeout = TimeSpan.FromSeconds(5);
+
     private readonly SemaphoreSlim _gate = new(1, 1);
     private readonly CancellationTokenSource _shutdown = new();
+    private readonly TimeSpan _connectTimeout;
 
     private TcpClient? _client;
     private NetworkStream? _stream;
@@ -28,21 +36,42 @@ public sealed class AdbClient : IAdbClient
 
     /// <summary>创建 adb 客户端。</summary>
     public AdbClient()
+        : this(null)
     {
+    }
+
+    /// <summary>创建 adb 客户端并指定连接与握手的默认等待上限。</summary>
+    /// <param name="connectTimeout">
+    /// 连接与握手的默认等待上限，为 null 时使用 <see cref="DefaultConnectTimeout"/>。
+    /// </param>
+    public AdbClient(TimeSpan? connectTimeout)
+    {
+        _connectTimeout = connectTimeout ?? DefaultConnectTimeout;
     }
 
     /// <summary>连接实例的 adbd 端口，执行 host:version 握手并返回协议版本。</summary>
     /// <param name="port">实例在宿主上映射的 adb 端口。</param>
     /// <param name="cancellationToken">取消令牌。</param>
+    /// <param name="timeout">
+    /// 本次连接与握手的等待上限，为 null 时使用实例级默认上限。
+    /// </param>
     /// <returns>adbd 通告的协议版本号。</returns>
-    /// <exception cref="XBearException">连接失败或握手不符合协议时抛出，分类为 <see cref="ErrorCategory.Protocol"/>。</exception>
-    public async Task<int> ConnectAsync(int port, CancellationToken cancellationToken = default)
+    /// <exception cref="XBearException">
+    /// 连接失败或握手不符合协议时抛出 <see cref="ErrorCategory.Protocol"/>；
+    /// 超过等待上限时抛出 <see cref="ErrorCategory.Timeout"/>。
+    /// </exception>
+    public async Task<int> ConnectAsync(
+        int port,
+        CancellationToken cancellationToken = default,
+        TimeSpan? timeout = null)
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         if (port is < 1 or > 65535)
         {
             throw new XBearException(ErrorCategory.Protocol, $"adb 端口 {port} 不是合法端口。");
         }
+
+        TimeSpan effectiveTimeout = timeout ?? _connectTimeout;
 
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -52,44 +81,106 @@ public sealed class AdbClient : IAdbClient
                 throw new XBearException(ErrorCategory.Protocol, "adb 客户端已处于连接状态。");
             }
 
-            var client = new TcpClient { NoDelay = true };
-            NetworkStream stream;
-            try
+            // 超时与调用方取消必须可区分：前者按可识别异常上报，后者保持取消语义。
+            using var timeoutSource = new CancellationTokenSource();
+            if (effectiveTimeout > TimeSpan.Zero)
             {
-                await client.ConnectAsync(IPAddress.Loopback, port, cancellationToken).ConfigureAwait(false);
-                stream = client.GetStream();
-            }
-            catch (OperationCanceledException)
-            {
-                client.Dispose();
-                throw;
-            }
-            catch (Exception ex) when (ex is SocketException or IOException or ObjectDisposedException)
-            {
-                client.Dispose();
-                throw new XBearException(ErrorCategory.Protocol, $"无法连接实例 adbd 端口 {port}。", null, ex);
+                timeoutSource.CancelAfter(effectiveTimeout);
             }
 
-            _client = client;
-            _stream = stream;
+            using var operation = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken,
+                _shutdown.Token,
+                timeoutSource.Token);
 
+            // 取消或超时时关闭套接字，保证阻塞中的读取一定被唤醒，不存在无法取消的死等。
+            using var registration = operation.Token.Register(AbortSocket);
+
+            bool connected = false;
             try
             {
-                using CancellationTokenSource linked = CreateLinkedToken(cancellationToken);
-                int version = await ReadProtocolVersionAsync(stream, linked.Token).ConfigureAwait(false);
-                await SelectTransportAsync(stream, linked.Token).ConfigureAwait(false);
-                return version;
+                var client = new TcpClient { NoDelay = true };
+                NetworkStream stream;
+                try
+                {
+                    await client.ConnectAsync(IPAddress.Loopback, port, operation.Token).ConfigureAwait(false);
+                    stream = client.GetStream();
+                }
+                catch
+                {
+                    client.Dispose();
+                    throw;
+                }
+
+                _client = client;
+                _stream = stream;
+                connected = true;
+
+                try
+                {
+                    int version = await ReadProtocolVersionAsync(stream, operation.Token).ConfigureAwait(false);
+                    await SelectTransportAsync(stream, operation.Token).ConfigureAwait(false);
+                    return version;
+                }
+                catch
+                {
+                    Teardown();
+                    throw;
+                }
             }
-            catch
+            catch (Exception ex) when (ex is OperationCanceledException or SocketException or IOException)
             {
                 Teardown();
-                throw;
+
+                // 调用方主动取消保持取消语义，其余按可识别的超时或协议错误上报。
+                if (ex is OperationCanceledException && cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+
+                ThrowIfConnectTimeout(ex, port, effectiveTimeout, timeoutSource, cancellationToken);
+                throw new XBearException(
+                    ErrorCategory.Protocol,
+                    connected ? $"与实例 adbd 端口 {port} 的握手失败。" : $"无法连接实例 adbd 端口 {port}。",
+                    null,
+                    ex);
             }
         }
         finally
         {
             _gate.Release();
         }
+    }
+
+    /// <summary>
+    /// 把「等待上限到期」转换成可识别的超时异常；其余异常按原样上抛。
+    /// 调用方主动取消或客户端释放导致的取消不属于超时，必须保持取消语义。
+    /// </summary>
+    /// <param name="exception">实际发生的异常。</param>
+    /// <param name="port">目标端口。</param>
+    /// <param name="effectiveTimeout">本次生效的等待上限。</param>
+    /// <param name="timeoutSource">等待上限令牌源。</param>
+    /// <param name="cancellationToken">调用方取消令牌。</param>
+    /// <exception cref="XBearException">确认是等待上限到期时抛出 <see cref="ErrorCategory.Timeout"/>。</exception>
+    private static void ThrowIfConnectTimeout(
+        Exception exception,
+        int port,
+        TimeSpan effectiveTimeout,
+        CancellationTokenSource timeoutSource,
+        CancellationToken cancellationToken)
+    {
+        if (!timeoutSource.IsCancellationRequested ||
+            cancellationToken.IsCancellationRequested ||
+            exception is not (OperationCanceledException or SocketException or IOException))
+        {
+            return;
+        }
+
+        throw new XBearException(
+            ErrorCategory.Timeout,
+            $"连接实例 adbd 端口 {port} 超时：{effectiveTimeout.TotalSeconds:F1} 秒内未完成握手。",
+            "实例可能尚未启动到 adbd 就绪；请等待启动完成后再连接，或调大该次连接的等待上限。",
+            exception);
     }
 
     /// <summary>执行一条 shell 命令并收集标准输出。</summary>
