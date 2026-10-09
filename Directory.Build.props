@@ -8,6 +8,12 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <!--
+      默认按 invariant 模式构建以获得稳定的字符串比较与排序行为；
+      但 WPF 的数据绑定会在运行时解析区域设置，invariant 模式下所有文化均为空，
+      绑定引擎会抛出「找不到对应的非中性文化」而中断。
+      因此 WPF 工程（XBear.App 与其测试工程）必须关闭该开关。
+    -->
     <InvariantGlobalization>true</InvariantGlobalization>
     <Product>小熊模拟器</Product>
     <Company>Xiaoxiong Emulator</Company>

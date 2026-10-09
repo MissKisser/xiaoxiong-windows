@@ -8,7 +8,7 @@ using XBear.App.Services;
 
 namespace XBear.App;
 
-/// <summary>主窗口代码后置，仅负责导出诊断包的目录选择，不承载业务逻辑。</summary>
+/// <summary>主窗口代码后置，仅负责文件选择对话框，不承载业务逻辑。</summary>
 public partial class MainWindow : Window
 {
     private DiagnosticsExporter? _diagnostics;
@@ -104,5 +104,31 @@ public partial class MainWindow : Window
 
         string directory = Path.GetDirectoryName(dialog.FileName) ?? string.Empty;
         viewModel.ExportDiagnosticsCommand.Execute(directory);
+    }
+
+    /// <summary>
+    /// 选择本地 Android 镜像文件并触发导入。文件路径由用户在系统对话框中指定。
+    /// </summary>
+    /// <param name="sender">事件源。</param>
+    /// <param name="e">事件参数。</param>
+    private void OnChooseBaseImageToImport(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not ViewModels.MainViewModel viewModel)
+        {
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.OpenFileDialog
+        {
+            Title = viewModel.ImportBaseImageText,
+            Filter = "Android 镜像文件 (*.iso;*.img;*.qcow2)|*.iso;*.img;*.qcow2|所有文件 (*.*)|*.*"
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        viewModel.ImportBaseImageCommand.Execute(dialog.FileName);
     }
 }

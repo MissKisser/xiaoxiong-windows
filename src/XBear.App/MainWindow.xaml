@@ -168,7 +168,7 @@
                         <TextBlock Text="{Binding DetailText}" TextWrapping="Wrap" />
                     </Border>
 
-                    <!-- 操作区：动作图标与文案并置，图标承担识别，文案承担确切命名。 -->
+<!-- 操作区：动作图标与文案并置，图标承担识别，文案承担确切命名。 -->
                     <WrapPanel Margin="{DynamicResource Token.Space.Md}">
                         <Button Command="{Binding StartSelectedCommand}">
                             <StackPanel Orientation="Horizontal">
@@ -223,6 +223,38 @@
                             </StackPanel>
                         </Button>
                     </WrapPanel>
+
+                    <!-- 镜像导入：本地 Android 镜像文件转换为 base 镜像，转换耗时较长，必须有进度与取消。 -->
+                    <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding ImportSectionTitle}" />
+                    <Border Style="{StaticResource Card}">
+                        <StackPanel>
+                            <TextBlock Text="{Binding ImportHintText}"
+                                       TextWrapping="Wrap"
+                                       Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                            <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Space.Md}">
+                                <Button Content="{Binding ImportBaseImageText}" Click="OnChooseBaseImageToImport" />
+                                <Button Content="{Binding CancelImportText}" Command="{Binding CancelImportCommand}" />
+                            </StackPanel>
+                            <StackPanel Visibility="{Binding HasImportProgress, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="{Binding ImportStageText}" FontWeight="{DynamicResource Token.Weight.Bold}" />
+                                <ProgressBar Minimum="0"
+                                             Maximum="100"
+                                             Value="{Binding ImportPercent}"
+                                             Margin="{DynamicResource Token.Space.Sm}" />
+                                <TextBlock Text="{Binding ImportPercentText}"
+                                           FontSize="{DynamicResource Token.Font.Caption}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                                <TextBlock Text="{Binding ImportDetailText}"
+                                           TextWrapping="Wrap"
+                                           FontSize="{DynamicResource Token.Font.Caption}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                                <TextBlock Text="{Binding ImportFailureText}"
+                                           TextWrapping="Wrap"
+                                           FontWeight="{DynamicResource Token.Weight.Bold}"
+                                           Foreground="{DynamicResource Token.Color.Text.Secondary}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
 
                     <!-- 输入通道：原生输入与投屏两条通路的状态，图标区分通路而不是错误类别。 -->
                     <StackPanel Style="{StaticResource SectionHeader}">

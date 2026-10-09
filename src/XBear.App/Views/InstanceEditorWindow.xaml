@@ -10,7 +10,6 @@
                     <Image Source="{StaticResource Icon.Instance}" Style="{StaticResource SectionHeaderIcon}" />
                     <TextBlock Style="{StaticResource SectionTitle}" Text="{Binding InstanceTerm}"
                                Margin="{DynamicResource Space.Margin.BesideIcon}" />
-                </StackPanel>
 
                 <TextBlock Text="基本信息" />
                 <TextBlock Text="显示名称" />
@@ -67,6 +66,7 @@
                     <TextBox Grid.Column="0" Text="{Binding ProxyHost, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBox Grid.Column="1" Text="{Binding ProxyPort, UpdateSourceTrigger=LostFocus}" />
                 </Grid>
+                </StackPanel>
 
                 <!-- 端口映射是宿主与实例之间的文件与协议转发入口。 -->
                 <StackPanel Style="{StaticResource SectionHeader}">

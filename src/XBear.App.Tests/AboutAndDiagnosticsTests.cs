@@ -210,10 +210,10 @@ public class AboutAndDiagnosticsTests
             using var stream = File.OpenRead(zipPath);
             using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
 
-            ZipArchiveEntry? systemInfo = archive.GetEntry("system/info.txt");
-            Assert.NotNull(systemInfo);
+            ZipArchiveEntry? buildTxt = archive.GetEntry("system/build.txt");
+            Assert.NotNull(buildTxt);
 
-            using var reader = new StreamReader(systemInfo.Open());
+            using var reader = new StreamReader(buildTxt.Open());
             string content = await reader.ReadToEndAsync();
 
             Assert.Contains($"build: {diagnostics.BuildId}", content, StringComparison.Ordinal);

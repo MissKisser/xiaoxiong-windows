@@ -41,12 +41,14 @@ public sealed class PortAllocatorTests
         {
             var ports = await allocator.AcquireAsync("instance-1");
 
-            Assert.True(ports.Adb < ports.Qmp, $"adb {ports.Adb} 应小于 qmp {ports.Qmp}。");
+Assert.True(ports.Adb < ports.Qmp, $"adb {ports.Adb} 应小于 qmp {ports.Qmp}。");
             Assert.True(ports.Qmp < ports.Vnc, $"qmp {ports.Qmp} 应小于 vnc {ports.Vnc}。");
             Assert.True(
                 ports.Adb >= PortAllocator.DefaultAdbStartPort,
                 $"adb {ports.Adb} 不应早于起点端口 {PortAllocator.DefaultAdbStartPort}。");
-
+            // 被测属性是「三个端口互不相同、严格递增且确实可绑定」，而不是「一定返回起始端口」——
+            // 起始端口被占用时分配器整体顺延，具体端口号取决于探测时刻哪些端口恰好空闲。
+            Assert.Equal(3, new[] { ports.Adb, ports.Qmp, ports.Vnc }.Distinct().Count());
             Assert.True(IsPortFree(ports.Adb), $"分配出的端口 {ports.Adb} 应当确实可绑定。");
             Assert.True(IsPortFree(ports.Qmp), $"分配出的端口 {ports.Qmp} 应当确实可绑定。");
             Assert.True(IsPortFree(ports.Vnc), $"分配出的端口 {ports.Vnc} 应当确实可绑定。");
@@ -54,6 +56,34 @@ public sealed class PortAllocatorTests
         finally
         {
             allocator.Release("instance-1");
+        }
+    }
+
+    [Fact]
+    public async Task 起始端口空闲时按配置原样返回()
+    {
+        var (basePort, listeners) = HoldContiguousPorts(3);
+        var allocator = new PortAllocator(basePort, basePort + 1, basePort + 2, maxCandidateOffsets: 16);
+
+        try
+        {
+            // 先释放监听端口，使配置的起始端口在分配探测时确实空闲。
+            foreach (var listener in listeners)
+            {
+                listener.Stop();
+            }
+
+            var ports = await allocator.AcquireAsync("instance-1");
+
+            Assert.Equal(new AllocatedPorts(basePort, basePort + 1, basePort + 2), ports);
+        }
+        finally
+        {
+            allocator.Release("instance-1");
+            foreach (var listener in listeners)
+            {
+                listener.Stop();
+            }
         }
     }
 

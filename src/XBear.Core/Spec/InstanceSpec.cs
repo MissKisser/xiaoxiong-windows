@@ -94,7 +94,7 @@ public sealed class ResourceSpec
     public int DiskGB { get; set; } = 32;
 
     /// <summary>
-    /// QEMU -cpu 型号，取值为空时由平台按镜像的指令集要求选型。
+    /// QEMU -cpu 型号，为 null 时由平台按镜像的指令集要求选型。
     /// Android-x86 系镜像要求 SSE4.2，默认 qemu64 缺失会导致系统主动拒绝引导。
     /// </summary>
     [JsonPropertyName("cpuModel")]

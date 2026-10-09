@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using XBear.App.Presentation;
@@ -17,7 +18,9 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly InstanceManager? _manager;
     private readonly DiagnosticsExporter _diagnostics;
     private readonly TerminologyCatalog _terms;
+    private readonly BaseImageImportService _importer;
     private readonly Dictionary<string, ImageSpec> _images;
+    private CancellationTokenSource? _importCts;
     private InputProbeResult _inputChannel = new(InputChannelKind.Unknown);
 
     [ObservableProperty]
@@ -38,6 +41,27 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool _isBusy;
 
+    [ObservableProperty]
+    private bool _isImporting;
+
+    [ObservableProperty]
+    private string _importStageText = string.Empty;
+
+    [ObservableProperty]
+    private string _importDetailText = string.Empty;
+
+    [ObservableProperty]
+    private double _importPercent;
+
+    [ObservableProperty]
+    private string _importPercentText = string.Empty;
+
+    [ObservableProperty]
+    private bool _hasImportProgress;
+
+    [ObservableProperty]
+    private string _importFailureText = string.Empty;
+
     /// <summary>
     /// 构造主视图模型。
     /// </summary>
@@ -46,14 +70,16 @@ public sealed partial class MainViewModel : ObservableObject
     /// <param name="images">镜像清单，按标识索引。</param>
     /// <param name="diagnostics">诊断包导出器。</param>
     /// <param name="terms">界面文案术语来源。</param>
-    /// <param name="version">版本契约文档，为空时从诊断包导出器获取。</param>
+/// <param name="version">版本契约文档，为空时从诊断包导出器获取。</param>
+    /// <param name="importer">base 镜像导入服务，为 null 时使用默认镜像根目录下的真实导入。</param>
     public MainViewModel(
         IInstanceRepository repository,
         InstanceManager? manager,
         IReadOnlyDictionary<string, ImageSpec> images,
         DiagnosticsExporter diagnostics,
         TerminologyCatalog terms,
-        VersionDocument? version = null)
+        VersionDocument? version = null,
+        BaseImageImportService? importer = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(images);
@@ -65,6 +91,7 @@ public sealed partial class MainViewModel : ObservableObject
         _images = new Dictionary<string, ImageSpec>(images, StringComparer.Ordinal);
         _diagnostics = diagnostics;
         _terms = terms;
+        _importer = importer ?? new BaseImageImportService(BaseImageImportService.DefaultImagesRoot);
 
         VersionDocument versionDoc = version ?? diagnostics.Version;
         ProductVersion = versionDoc.Product.Version;
@@ -143,6 +170,32 @@ public sealed partial class MainViewModel : ObservableObject
 
     /// <summary>空列表提示。</summary>
     public string EmptyHintText => $"尚未创建{_terms.Instance}。";
+
+    /// <summary>镜像导入区标题文案。</summary>
+    public string ImportSectionTitle => $"{_terms.Image}导入";
+
+    /// <summary>导入按钮文案。</summary>
+    public string ImportBaseImageText => $"导入{_terms.Image}";
+
+    /// <summary>取消导入按钮文案。</summary>
+    public string CancelImportText => "取消导入";
+
+    /// <summary>导入区说明文案。</summary>
+    public string ImportHintText =>
+        $"选择本地 Android {_terms.Image}文件（ISO 或 img），转换为{_terms.Instance}可用的 base 镜像。"
+        + "转换耗时与文件体积和磁盘速度相关，通常需要几十秒，进度会实时显示，过程中可随时取消。";
+
+    /// <summary>导入失败后的阶段文案。</summary>
+    public string ImportFailedText => $"{_terms.Image}导入失败";
+
+    /// <summary>导入被取消后的阶段文案。</summary>
+    public string ImportCanceledText => "已取消导入，未生成任何文件";
+
+    /// <summary>是否允许开始导入。</summary>
+    public bool CanImportBaseImage => !IsImporting;
+
+    /// <summary>是否允许取消导入。</summary>
+    public bool CanCancelImport => IsImporting;
 
     [ObservableProperty]
     private string _riskBannerText;
@@ -277,6 +330,128 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
+    /// 把用户选择的本地 Android 镜像导入为 base 镜像。
+    ///
+    /// 转换耗时较长，过程通过阶段文案、实测百分比与最近一条过程说明反馈；
+    /// 用户可在任何阶段取消，取消后不会留下半成品。
+    /// </summary>
+    /// <param name="sourceImagePath">用户选择的源镜像路径。</param>
+    /// <returns>异步任务。</returns>
+    [RelayCommand(CanExecute = nameof(CanImportBaseImage))]
+    public async Task ImportBaseImageAsync(string sourceImagePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourceImagePath))
+        {
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        _importCts = cts;
+
+        DismissError();
+        IsImporting = true;
+        HasImportProgress = true;
+        ImportFailureText = string.Empty;
+        ImportPercent = 0;
+        ImportPercentText = string.Empty;
+        ImportDetailText = string.Empty;
+        ImportStageText = BaseImageImportService.PreparingText;
+
+        try
+        {
+            await _importer.ImportAsync(sourceImagePath, OnImportProgress, cts.Token).ConfigureAwait(true);
+        }
+        catch (OperationCanceledException)
+        {
+            // 取消不是失败：Core 已把半成品清理掉，只需如实告知本次没有产出。
+            ImportStageText = ImportCanceledText;
+            ImportPercentText = string.Empty;
+        }
+        catch (Exception ex)
+        {
+            // 无论何种异常都把原因摆到界面上，不让转换失败表现为无反馈。
+            ImportStageText = ImportFailedText;
+            ImportPercentText = string.Empty;
+            ImportFailureText = DescribeImportFailure(ex);
+            Present(ex);
+        }
+        finally
+        {
+            _importCts = null;
+            IsImporting = false;
+        }
+    }
+
+    /// <summary>
+    /// 取消正在进行的镜像导入。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanCancelImport))]
+    public void CancelImport() => _importCts?.Cancel();
+
+    /// <summary>
+    /// 接收导入进度。Core 的进度回调可能来自后台线程，这里统一切回界面线程再改属性。
+    /// </summary>
+    /// <param name="progress">进度快照。</param>
+    private void OnImportProgress(BaseImageImportProgress progress)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            ApplyImportProgress(progress);
+            return;
+        }
+
+        dispatcher.BeginInvoke(new Action(() => ApplyImportProgress(progress)));
+    }
+
+    /// <summary>
+    /// 把进度快照刷到界面。缺失的过程说明保留上一条，避免采样节奏把已有信息冲掉。
+    /// </summary>
+    /// <param name="progress">进度快照。</param>
+    private void ApplyImportProgress(BaseImageImportProgress progress)
+    {
+        HasImportProgress = true;
+        ImportStageText = progress.StageText;
+
+        if (!string.IsNullOrWhiteSpace(progress.Detail))
+        {
+            ImportDetailText = progress.Detail;
+        }
+
+        if (progress.Percent is not int percent)
+        {
+            return;
+        }
+
+        ImportPercent = percent;
+        ImportPercentText = $"{percent}%";
+    }
+
+    /// <summary>
+    /// 把导入异常整理为界面可读的文本，沿用统一的错误分类口径。
+    /// </summary>
+    /// <param name="ex">导入异常。</param>
+    /// <returns>含分类标题、原因与处置建议的文本。</returns>
+    private string DescribeImportFailure(Exception ex)
+    {
+        (Presentation.ErrorCategoryText text, string? remediation) = ErrorPresenter.Describe(ex);
+
+        return string.IsNullOrWhiteSpace(remediation)
+            ? $"{text.Title}：{ex.Message}"
+            : $"{text.Title}：{ex.Message}{Environment.NewLine}{remediation}";
+    }
+
+    /// <summary>刷新导入相关命令的可执行状态。</summary>
+    private void NotifyImportCommands()
+    {
+        ImportBaseImageCommand.NotifyCanExecuteChanged();
+        CancelImportCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsImportingChanged(bool value) => NotifyImportCommands();
+
+    /// <summary>
     /// 导出诊断包到用户选择的目录。
     /// </summary>
     /// <param name="directory">用户选择的输出目录。</param>
@@ -304,8 +479,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// </summary>
     /// <param name="result">输入通路探测结论。</param>
     public void UpdateInputChannel(InputProbeResult result)
-    {
-        ArgumentNullException.ThrowIfNull(result);
+    {        ArgumentNullException.ThrowIfNull(result);
         _inputChannel = result;
         RefreshInputChannel();
     }

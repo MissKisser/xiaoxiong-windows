@@ -252,7 +252,7 @@ public sealed class ProbingInputChannelTests
         InputProbeResult result = await channel.ProbeAsync();
 
         Assert.Equal(InputChannelKind.Unavailable, result.Channel);
-        Assert.Contains("root", result.ProjectionFailure!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("权限", result.ProjectionFailure!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -347,7 +347,7 @@ public sealed class ProbingInputChannelTests
     }
 
     [Fact]
-    public void 构造触摸事件载荷_包含按下与释放()
+    public void 构造触摸事件载荷_包含按下与抬起()
     {
         object payload = ProbingInputChannel.BuildTouchEventPayload(10, 20);
 
@@ -356,10 +356,12 @@ public sealed class ProbingInputChannelTests
         JsonElement events = doc.RootElement.GetProperty("events");
 
         Assert.Equal(4, events.GetArrayLength());
+        Assert.Equal("abs", events[0].GetProperty("type").GetString());
         Assert.Equal(10, events[0].GetProperty("data").GetProperty("value").GetInt32());
         Assert.Equal(20, events[1].GetProperty("data").GetProperty("value").GetInt32());
-        Assert.Equal(1, events[2].GetProperty("data").GetProperty("value").GetInt32());
-        Assert.Equal(0, events[3].GetProperty("data").GetProperty("value").GetInt32());
+        Assert.Equal("btn", events[2].GetProperty("type").GetString());
+        Assert.True(events[2].GetProperty("data").GetProperty("down").GetBoolean());
+        Assert.False(events[3].GetProperty("data").GetProperty("down").GetBoolean());
     }
 
     [Fact]

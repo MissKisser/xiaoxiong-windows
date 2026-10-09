@@ -3,12 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="确认暴露级别" Height="320" Width="560"
         WindowStartupLocation="CenterOwner" ResizeMode="NoResize">
-    <Grid>
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-
-        <Border Grid.Row="0" Style="{StaticResource FadeInOnLoad}">
+    <Border Style="{StaticResource FadeInOnLoad}">
             <StackPanel Margin="{DynamicResource Token.Space.Xl}">
                 <StackPanel Style="{StaticResource SectionHeader}">
                     <Image Source="{StaticResource Icon.Exposure}" Style="{StaticResource SectionHeaderIcon}" />
@@ -44,5 +39,4 @@
                 </StackPanel>
             </StackPanel>
         </Border>
-    </Grid>
 </Window>

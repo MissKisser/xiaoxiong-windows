@@ -938,3 +938,155 @@ public class TerminologyComplianceTests
     private static string Relative(string path) =>
         Path.GetRelativePath(UiSources.Root, path);
 }
+
+/// <summary>
+/// 规则二自证：XAML 引用的每一个设计令牌键，都必须由 Theme/TokenResources.cs 真实写入资源字典。
+///
+/// 这类错误只在窗口构造、样式被应用时才暴露，单元测试默认不构造真实窗口，
+/// 因此若无此静态交叉核对，一个拼错的键或缺失的形态会一路绿到程序启动即崩。
+/// WPF 的资源名区分大小写，写错一个字母即解析失败。
+/// </summary>
+public class TokenKeyReferentialIntegrityTests
+{
+    /// <summary>匹配 XAML 中 DynamicResource 与 StaticResource 引用的令牌键。</summary>
+    private static readonly Regex TokenReference = new(
+        @"Token\.[A-Za-z0-9.]+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>匹配 TokenResources 中写入资源字典的键，写入时会补上统一前缀。</summary>
+    private static readonly Regex ProducedKey = new(
+        @"Put\(resources,\s*""([^""]+)""",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    /// <summary>TokenResources 写入键时使用的统一前缀。</summary>
+    private const string TokenPrefix = "Token.";
+
+    private static IReadOnlyCollection<string> ReadReferencedKeys()
+    {
+        var referenced = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (string path in UiSources.Enumerate()
+                     .Where(p => p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)))
+        {
+            foreach (Match match in TokenReference.Matches(File.ReadAllText(path)))
+            {
+                referenced.Add(match.Value);
+            }
+        }
+
+        return referenced;
+    }
+
+    private static IReadOnlyCollection<string> ReadProducedKeys()
+    {
+        string source = File.ReadAllText(
+            UiSources.Enumerate().First(p =>
+                p.EndsWith("TokenResources.cs", StringComparison.OrdinalIgnoreCase)));
+
+        var produced = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in ProducedKey.Matches(source))
+        {
+            produced.Add(TokenPrefix + match.Groups[1].Value);
+        }
+
+        return produced;
+    }
+
+    [Fact]
+    public void EveryTokenKeyReferencedByXamlIsActuallyWrittenToResourceDictionary()
+    {
+        IReadOnlyCollection<string> referenced = ReadReferencedKeys();
+        IReadOnlyCollection<string> produced = ReadProducedKeys();
+
+        // 防止两侧都为空而空转：界面确实消费了令牌，桥接层也确实产出了键。
+        Assert.NotEmpty(referenced);
+        Assert.NotEmpty(produced);
+
+        var missing = referenced.Where(k => !produced.Contains(k)).OrderBy(k => k, StringComparer.Ordinal).ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "XAML 引用了未由 TokenResources 写入的资源键，运行期会解析失败：" + Environment.NewLine +
+            string.Join(Environment.NewLine, missing));
+    }
+
+    [Fact]
+    public void CompositeTypedTokenFormsArePresentForSpacingAndCornerRadius()
+    {
+        // Margin 与 Padding 的类型是 Thickness，CornerRadius 属性要 CornerRadius，
+        // 都不能直接消费 double 形态的令牌。缺少对应形态时窗口构造会抛异常。
+        IReadOnlyCollection<string> produced = ReadProducedKeys();
+
+        var required = new[]
+        {
+            TokenPrefix + "Thickness.Xs",
+            TokenPrefix + "Thickness.Sm",
+            TokenPrefix + "Thickness.Md",
+            TokenPrefix + "Thickness.Lg",
+        };
+
+        var absent = required.Where(k => !produced.Contains(k)).ToList();
+
+        Assert.True(
+            absent.Count == 0,
+            "间距令牌必须提供 Thickness 形态供 Margin 与 Padding 消费：" + Environment.NewLine +
+            string.Join(Environment.NewLine, absent));
+    }
+}
+
+/// <summary>
+/// 规则三自证：WPF 界面层不得在 invariant 全球化模式下构建。
+///
+/// invariant 模式下进程内所有区域设置均为空，WPF 数据绑定在解析语言时
+/// 会抛出「找不到对应的非中性文化」而中断，程序在启动阶段直接失败。
+/// 该缺陷对所有单元测试不可见，因此必须在构建配置层面守住。
+/// </summary>
+public class GlobalizedUiTests
+{
+    /// <summary>
+    /// 取界面层程序集自身的运行时配置文件路径。
+    /// 测试进程本身的入口是测试宿主，检查它没有意义，必须检查被测程序集。
+    /// </summary>
+    private static string RuntimeConfigPath
+    {
+        get
+        {
+            string assemblyPath = typeof(XBear.App.App).Assembly.Location;
+            string configPath = Path.ChangeExtension(assemblyPath, ".runtimeconfig.json");
+
+            if (!File.Exists(configPath))
+            {
+                throw new InvalidOperationException($"找不到运行时配置文件，测试结论不成立：{configPath}");
+            }
+
+            return configPath;
+        }
+    }
+
+    [Fact]
+    public void UiAssemblyIsNotBuiltWithInvariantGlobalization()
+    {
+        string path = RuntimeConfigPath;
+        string config = File.ReadAllText(path);
+
+        // 只在显式声明为 true 时才算启用；键缺失即默认关闭。
+        Assert.False(
+            config.Contains("\"System.Globalization.Invariant\": true", StringComparison.Ordinal),
+            "WPF 界面层不得以 invariant 全球化模式构建，否则数据绑定会因无法解析区域设置而中断：" +
+            Environment.NewLine + path);
+    }
+
+    [Fact]
+    public void RuntimeExposesAtLeastOneConcreteCulture()
+    {
+        // invariant 模式下不会有任何具体文化，绑定引擎必然失败。
+        var concrete = CultureInfo.GetCultures(CultureTypes.AllCultures)
+            .Where(c => !c.IsNeutralCulture)
+            .ToList();
+
+        Assert.NotEmpty(concrete);
+        Assert.False(
+            CultureInfo.CurrentUICulture.IsNeutralCulture,
+            "当前 UI 文化不应是中性的，否则 WPF 绑定无法解析。");
+    }
+}

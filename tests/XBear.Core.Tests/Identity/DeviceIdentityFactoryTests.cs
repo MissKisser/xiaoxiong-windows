@@ -148,10 +148,10 @@ public sealed class DeviceIdentityFactoryTests : IDisposable
             new SequenceDeviceIdentityGenerator(colliding),
             maxAttempts: 3);
 
-        Diagnostics.XBearException ex = await Assert.ThrowsAsync<Diagnostics.XBearException>(
+        XBear.Core.Diagnostics.XBearException ex = await Assert.ThrowsAsync<XBear.Core.Diagnostics.XBearException>(
             () => factory.GenerateAsync());
 
-        Assert.Equal(Diagnostics.ErrorCategory.Identity, ex.Category);
+        Assert.Equal(XBear.Core.Diagnostics.ErrorCategory.Identity, ex.Category);
         Assert.False(string.IsNullOrWhiteSpace(ex.Remediation));
     }
 
@@ -165,10 +165,10 @@ public sealed class DeviceIdentityFactoryTests : IDisposable
             Imei = "861234567890124",
         };
 
-        Diagnostics.XBearException ex = Assert.Throws<Diagnostics.XBearException>(
+        XBear.Core.Diagnostics.XBearException ex = Assert.Throws<XBear.Core.Diagnostics.XBearException>(
             () => DeviceIdentityFactory.ValidateFormat(identity));
 
-        Assert.Equal(Diagnostics.ErrorCategory.Identity, ex.Category);
+        Assert.Equal(XBear.Core.Diagnostics.ErrorCategory.Identity, ex.Category);
     }
 
     [Fact]

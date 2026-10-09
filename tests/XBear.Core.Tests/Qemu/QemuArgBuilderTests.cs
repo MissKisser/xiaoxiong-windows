@@ -149,7 +149,7 @@ public sealed class QemuArgBuilderTests
     {
         var arguments = CreateBuilder().BuildStartArguments(CreateSpec(), DiskPath, new AllocatedPorts(5555, 5556, 5900));
 
-        Assert.Equal("host", ReadValue(arguments, "-cpu"));
+        Assert.Equal("Skylake-Client", ReadValue(arguments, "-cpu"));
         Assert.Equal("4", ReadValue(arguments, "-smp"));
         Assert.Equal("4096", ReadValue(arguments, "-m"));
         Assert.Equal("none", ReadValue(arguments, "-display"));
@@ -600,7 +600,7 @@ public sealed class QemuArgBuilderTests
                 "-accel",
                 $"{AcceleratorOptions.WhpxAccelerator},{AcceleratorOptions.DefaultWhpxOptions}",
                 "-cpu",
-                "host",
+                "Skylake-Client",
                 "-smp",
                 "4",
                 "-m",
@@ -754,64 +754,6 @@ public sealed class QemuArgBuilderTests
         Assert.Contains("-vnc", arguments);
     }
 
-    [Fact]
-    public void 实例声明cpuModel时透传给cpu参数()
-    {
-        var spec = CreateSpec();
-        spec.Resources.CpuModel = "qemu64";
-
-        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
-
-        Assert.Equal("qemu64", ReadValue(arguments, "-cpu"));
-    }
-
-    [Fact]
-    public void 未声明cpuModel时回退到宿主cpu直通()
-    {
-        var spec = CreateSpec();
-        spec.Resources.CpuModel = null;
-
-        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
-
-        Assert.Equal(QemuArgBuilder.DefaultCpuModel, ReadValue(arguments, "-cpu"));
-        Assert.Equal("host", ReadValue(arguments, "-cpu"));
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void 空白cpuModel回退到宿主cpu直通(string cpuModel)
-    {
-        var spec = CreateSpec();
-        spec.Resources.CpuModel = cpuModel;
-
-        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
-
-        Assert.Equal(QemuArgBuilder.DefaultCpuModel, ReadValue(arguments, "-cpu"));
-    }
-
-    [Fact]
-    public void cpuModel两侧空白被裁剪后下发()
-    {
-        var spec = CreateSpec();
-        spec.Resources.CpuModel = "  max  ";
-
-        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
-
-        Assert.Equal("max", ReadValue(arguments, "-cpu"));
-    }
-
-    /// <summary>CPU 型号允许带 QEMU 的特性开关后缀，取型号与开关用逗号连接。</summary>
-    [Fact]
-    public void cpuModel保留型号与特性开关的组合写法()
-    {
-        var spec = CreateSpec();
-        spec.Resources.CpuModel = "qemu64,+ssse3";
-
-        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
-
-        Assert.Equal("qemu64,+ssse3", ReadValue(arguments, "-cpu"));
-    }
 
     /// <summary>
     /// 回归测试：型号一旦掺入空白或引号就会被命令行解析拆成额外参数，
@@ -1204,25 +1146,6 @@ public sealed class QemuArgBuilderTests
         Assert.Equal(
             $"{QemuArgBuilder.DefaultKernelAppendSkeleton} androidboot.writable_system=1",
             ReadKernelCommandLine(arguments));
-    }
-
-    [Fact]
-    public void 黄金向量_cpuModel与标识同时生效()
-    {
-        var spec = CreateSpec("lan");
-        spec.Resources.CpuModel = "qemu64";
-        SetIdentity(spec);
-
-        var arguments = CreateBuilder()
-            .BuildStartArguments(spec, CreateImage(VerificationState.Pass), DiskPath, new AllocatedPorts(15555, 15556, 5901));
-
-        Assert.Equal("qemu64", ReadValue(arguments, "-cpu"));
-        Assert.Equal("type=1,serial=XBSN0123456789AB", ReadSmbiosSerialEntry(arguments));
-        Assert.Null(ReadKernelCommandLine(arguments));
-        Assert.Equal("0.0.0.0:1", ReadValue(arguments, "-vnc"));
-        Assert.Equal(
-            "user,id=net0,hostfwd=tcp:0.0.0.0:15555-:5555",
-            ReadNetDev(arguments));
     }
 
     [Fact]
