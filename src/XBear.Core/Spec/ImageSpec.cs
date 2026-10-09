@@ -26,6 +26,12 @@ public sealed class ImageSpec
 
     [JsonPropertyName("verified")]
     public ImageVerification? Verified { get; set; }
+
+    /// <summary>
+    /// 镜像包内推荐引导配置。携带此字段的镜像在创建实例时可自动填充内核直启所需参数。
+    /// </summary>
+    [JsonPropertyName("boot")]
+    public BootSpec? Boot { get; set; }
 }
 
 /// <summary>镜像来源信息。</summary>
@@ -104,4 +110,22 @@ public enum VerificationState
     Untested = 0,
     Pass = 1,
     Fail = 2
+}
+
+/// <summary>
+/// 镜像包内推荐引导配置，用于内核直启场景。
+/// </summary>
+public sealed class BootSpec
+{
+    /// <summary>内核文件名，位于镜像包根目录。用于内核直启的 -kernel 参数。</summary>
+    [JsonPropertyName("kernel")]
+    public string Kernel { get; set; } = string.Empty;
+
+    /// <summary>初始 ramdisk 文件名，位于镜像包根目录。用于内核直启的 -initrd 参数。</summary>
+    [JsonPropertyName("initrd")]
+    public string Initrd { get; set; } = string.Empty;
+
+    /// <summary>内核命令行骨架字符串，推荐包含 root=、quiet、nomodeset 等关键参数。用于内核直启的 -append 参数。</summary>
+    [JsonPropertyName("kernelAppend")]
+    public string KernelAppend { get; set; } = string.Empty;
 }

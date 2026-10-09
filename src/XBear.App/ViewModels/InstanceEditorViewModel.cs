@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using XBear.App.Presentation;
@@ -67,6 +68,7 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
     private readonly TerminologyCatalog _terms;
     private readonly IDeviceIdentityFactory _identityFactory;
     private readonly IDensityAdvisor _densityAdvisor;
+    private readonly IReadOnlyDictionary<string, ImageSpec> _images;
 
     [ObservableProperty]
     private string _displayName = string.Empty;
@@ -137,6 +139,7 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
         _terms = terms;
         _identityFactory = DeviceIdentityProvisioning.Resolve(repository, identityFactory);
         _densityAdvisor = densityAdvisor ?? new InstanceDensityAdvisor();
+        _images = images;
 
         // 暴露级别绝不默认对外，初始一律为回环。
         Exposure = new ExposureSelection(new[]
@@ -399,6 +402,7 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
     /// <summary>
     /// 组装实例配置。设备标识在此生成并写入配置：每个实例必须拥有独立标识，
     /// 且不得与在册实例或已删除实例曾用过的标识重复。
+    /// 若所选镜像携带引导推荐配置，自动填充 platformConfig 的内核直启参数。
     /// </summary>
     /// <returns>待落盘的实例配置。</returns>
     private async Task<InstanceSpec> BuildSpecAsync()
@@ -408,7 +412,25 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
             .Select(r => r.ToModel())
             .ToList();
 
-        return new InstanceSpec
+        // 查找所选镜像的 boot 推荐配置。
+        BootSpec? boot = FindSelectedImageBoot();
+
+        // 解析镜像根目录路径，用于构建内核与 initrd 的绝对路径。
+        // 镜像文件位于 imagesRoot/{stem}.qcow2 同级的镜像包目录中。
+        string? imageDirectory = null;
+        if (boot is not null)
+        {
+            string stem = Path.GetFileNameWithoutExtension(ImageRef);
+            if (string.IsNullOrWhiteSpace(stem))
+            {
+                stem = "android";
+            }
+
+            // base qcow2 的父目录即为镜像包内容目录，boot 引用的文件与之同目录。
+            imageDirectory = Path.Combine(BaseImageImportService.DefaultImagesRoot, stem);
+        }
+
+        var spec = new InstanceSpec
         {
             Id = Guid.NewGuid().ToString("N")[..12],
             DisplayName = DisplayName,
@@ -431,6 +453,43 @@ public sealed partial class InstanceEditorViewModel : ObservableObject
             },
             DeviceIdentity = await _identityFactory.GenerateAsync().ConfigureAwait(true),
         };
+
+        // 若镜像携带引导推荐，填充 platformConfig 的内核直启参数。
+        if (boot is not null && imageDirectory is not null)
+        {
+            spec.PlatformConfig = new PlatformConfig
+            {
+                KernelImage = Path.Combine(imageDirectory, boot.Kernel),
+                InitrdImage = Path.Combine(imageDirectory, boot.Initrd),
+                KernelAppend = boot.KernelAppend
+            };
+        }
+
+        return spec;
+    }
+
+    /// <summary>
+    /// 查找当前所选镜像的引导推荐配置。
+    /// 镜像字典按 imageRef 索引，但 UI 选择以 DisplayName 为标识，
+    /// 因此需要遍历查找匹配 DisplayName 的镜像。
+    /// </summary>
+    /// <returns>引导推荐配置，未找到或无推荐时返回 null。</returns>
+    private BootSpec? FindSelectedImageBoot()
+    {
+        if (string.IsNullOrWhiteSpace(ImageRef))
+        {
+            return null;
+        }
+
+        foreach (ImageSpec image in _images.Values)
+        {
+            if (string.Equals(image.DisplayName, ImageRef, StringComparison.Ordinal))
+            {
+                return image.Boot;
+            }
+        }
+
+        return null;
     }
 
     partial void OnExposureLevelChanged(string value)
