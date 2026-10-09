@@ -87,16 +87,29 @@ public class FidelitySemanticsTests
         Assert.Contains(result.Errors, e => e.Path == "/verified/fidelity/P1_root");
     }
 
+    /// <summary>
+    /// 验证镜像样例的保真度字段如实反映实测事实，未实测或不达标项均不标记为通过。
+    /// </summary>
+    /// <param name="key">保真度逐项键名。</param>
+    /// <param name="expected">期望的实测或未测状态。</param>
     [Theory]
-    [MemberData(nameof(FidelityKeys))]
-    public void SampleFidelityIsUntestedAndNotClaimedAsPass(string key)
+    [InlineData("P1_root", "fail")]
+    [InlineData("P2_systemWrite", "fail")]
+    [InlineData("P3_moduleFlash", "untested")]
+    [InlineData("P4_imageSwap", "untested")]
+    [InlineData("P5_rootPersist", "untested")]
+    [InlineData("P6_armApp", "untested")]
+    public void SampleFidelityReflectsMeasuredFactsAndNeverClaimsPass(string key, string expected)
     {
         var value = JsonNode.Parse(SpecTestHost.ImageJson())!["verified"]!["fidelity"]![key]!
             .GetValue<string>();
 
-        Assert.Equal("untested", value);
+        Assert.Equal(expected, value);
     }
 
+    /// <summary>
+    /// 验证镜像样例中没有任何保真度项声称通过。
+    /// </summary>
     [Fact]
     public void NoFidelityItemInSampleClaimsPass()
     {
@@ -109,14 +122,17 @@ public class FidelitySemanticsTests
         }
     }
 
+    /// <summary>
+    /// 验证强类型模型解析镜像样例后准确还原各项保真度状态。
+    /// </summary>
     [Fact]
-    public void ParsedModelNeverReportsPassForUntestedSample()
+    public void ParsedModelReflectsSampleFidelity()
     {
         var spec = SpecTestHost.Loader.ParseImage(SpecTestHost.ImageJson());
 
         var fidelity = spec.Verified!.Fidelity;
-        Assert.Equal(VerificationState.Untested, fidelity.P1Root);
-        Assert.Equal(VerificationState.Untested, fidelity.P2SystemWrite);
+        Assert.Equal(VerificationState.Fail, fidelity.P1Root);
+        Assert.Equal(VerificationState.Fail, fidelity.P2SystemWrite);
         Assert.Equal(VerificationState.Untested, fidelity.P3ModuleFlash);
         Assert.Equal(VerificationState.Untested, fidelity.P4ImageSwap);
         Assert.Equal(VerificationState.Untested, fidelity.P5RootPersist);
