@@ -28,6 +28,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly Views.IFileTransferWindowHost? _fileTransferWindows;
     private readonly Views.IApplicationWindowHost? _applicationWindows;
     private readonly Views.IModuleWindowHost? _moduleWindows;
+    private readonly Views.ISnapshotWindowHost? _snapshotWindows;
 
     [ObservableProperty]
     private InstanceListItemViewModel? _selected;
@@ -83,6 +84,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <param name="fileTransferWindows">文件传输窗口宿主，为 null 时不提供文件传输入口。</param>
     /// <param name="applicationWindows">应用管理窗口宿主，为 null 时不提供应用管理入口。</param>
     /// <param name="moduleWindows">模块管理窗口宿主，为 null 时不提供模块管理入口。</param>
+    /// <param name="snapshotWindows">快照管理窗口宿主，为 null 时不提供快照管理入口。</param>
     public MainViewModel(
         IInstanceRepository repository,
         InstanceManager? manager,
@@ -95,7 +97,8 @@ public sealed partial class MainViewModel : ObservableObject
         Views.IProjectionWindowHost? projectionWindows = null,
         Views.IFileTransferWindowHost? fileTransferWindows = null,
         Views.IApplicationWindowHost? applicationWindows = null,
-        Views.IModuleWindowHost? moduleWindows = null)
+        Views.IModuleWindowHost? moduleWindows = null,
+        Views.ISnapshotWindowHost? snapshotWindows = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(images);
@@ -113,6 +116,7 @@ public sealed partial class MainViewModel : ObservableObject
         _fileTransferWindows = fileTransferWindows;
         _applicationWindows = applicationWindows;
         _moduleWindows = moduleWindows;
+        _snapshotWindows = snapshotWindows;
 
         VersionDocument versionDoc = version ?? diagnostics.Version;
         ProductVersion = versionDoc.Product.Version;
@@ -406,6 +410,43 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         _moduleWindows.Close(Selected.Id);
+    }
+
+    /// <summary>
+    /// 快照管理入口是否可用。快照可列举也可删除，因此只要求选中了实例；
+    /// 是否允许创建由快照管理窗口按实例运行态裁定。
+    /// </summary>
+    public bool CanOpenSnapshots => _snapshotWindows is not null && Selected is not null;
+
+    /// <summary>管理快照按钮文案。</summary>
+    public string OpenSnapshotsText => string.Concat("管理", _terms.Snapshot);
+
+    /// <summary>
+    /// 为选中的实例打开快照管理窗口。同一实例已有窗口时置前。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenSnapshots))]
+    public void OpenSnapshots()
+    {
+        if (_snapshotWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _snapshotWindows.Open(Selected.Id, Selected.DisplayName, ProjectionOwner);
+    }
+
+    /// <summary>
+    /// 关闭选中实例的快照管理窗口。未打开时不做任何事。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenSnapshots))]
+    public void CloseSelectedSnapshots()
+    {
+        if (_snapshotWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _snapshotWindows.Close(Selected.Id);
     }
 
     /// <summary>投屏窗口的宿主窗口，供视图模型在开窗时指定归属。</summary>
@@ -935,6 +976,8 @@ public sealed partial class MainViewModel : ObservableObject
         CloseSelectedApplicationsCommand.NotifyCanExecuteChanged();
         OpenModulesCommand.NotifyCanExecuteChanged();
         CloseSelectedModulesCommand.NotifyCanExecuteChanged();
+        OpenSnapshotsCommand.NotifyCanExecuteChanged();
+        CloseSelectedSnapshotsCommand.NotifyCanExecuteChanged();
     }
 
     private void RefreshDetail()
@@ -1037,6 +1080,9 @@ public sealed partial class MainViewModel : ObservableObject
             _fileTransferWindows?.Close(e.InstanceId);
             _applicationWindows?.Close(e.InstanceId);
             _moduleWindows?.Close(e.InstanceId);
+
+            // 快照窗口不在此处收敛：恢复流程本身要让实例经历停止与重新启动，
+            // 停止即关闭会让用户看不到恢复结果，只在实例进入故障态时收敛。
         }
 
         OpenProjectionCommand.NotifyCanExecuteChanged();
@@ -1047,6 +1093,13 @@ public sealed partial class MainViewModel : ObservableObject
         CloseSelectedApplicationsCommand.NotifyCanExecuteChanged();
         OpenModulesCommand.NotifyCanExecuteChanged();
         CloseSelectedModulesCommand.NotifyCanExecuteChanged();
+        OpenSnapshotsCommand.NotifyCanExecuteChanged();
+        CloseSelectedSnapshotsCommand.NotifyCanExecuteChanged();
+
+        if (e.NewState == InstanceState.Faulted)
+        {
+            _snapshotWindows?.Close(e.InstanceId);
+        }
 
         if (Selected is not null && string.Equals(Selected.Id, e.InstanceId, StringComparison.Ordinal))
         {

@@ -108,6 +108,14 @@ public static class AppComposition
         var moduleInstallerService = new Core.Modules.ModuleInstallerService();
         var moduleWindows = new Views.ModuleWindowHost(moduleInstallerService, getAdbPort, terms);
 
+        // 快照的运行态与端口同样来自编排器：创建与恢复都要经 QMP 与实例的实际端口。
+        var snapshotService = new Core.Snapshots.SnapshotService(
+            manager,
+            repository,
+            qmpClientFactory: static () => new Core.Qmp.QmpClient(),
+            validator: validator);
+        var snapshotWindows = new Views.SnapshotWindowHost(snapshotService, terms);
+
         return new AppServices(
             repository,
             manager,
@@ -129,7 +137,9 @@ public static class AppComposition
             applicationService,
             applicationWindows,
             moduleInstallerService,
-            moduleWindows);
+            moduleWindows,
+            snapshotService,
+            snapshotWindows);
     }
 
     /// <summary>
@@ -240,6 +250,8 @@ public sealed record ManifestRejection(string ManifestName, string Reason);
 /// <param name="ApplicationWindows">应用管理窗口宿主。</param>
 /// <param name="Modules">模块安装服务。</param>
 /// <param name="ModuleWindows">模块管理窗口宿主。</param>
+/// <param name="Snapshots">快照生命周期服务。</param>
+/// <param name="SnapshotWindows">快照管理窗口宿主。</param>
 public sealed record AppServices(
     IInstanceRepository Repository,
     InstanceManager Manager,
@@ -261,4 +273,6 @@ public sealed record AppServices(
     Core.Applications.ApplicationService Applications,
     Views.IApplicationWindowHost ApplicationWindows,
     Core.Modules.ModuleInstallerService Modules,
-    Views.IModuleWindowHost ModuleWindows);
+    Views.IModuleWindowHost ModuleWindows,
+    Core.Snapshots.SnapshotService Snapshots,
+    Views.ISnapshotWindowHost SnapshotWindows);

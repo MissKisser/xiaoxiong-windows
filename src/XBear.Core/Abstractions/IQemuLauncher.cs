@@ -73,17 +73,6 @@ public interface IQcow2Manager
     /// <param name="cancellationToken">取消令牌。</param>
     Task CreateOverlayAsync(string baseImagePath, string overlayPath, CancellationToken cancellationToken = default);
 
-    /// <summary>在当前 overlay 之上再叠一层，用于快照。</summary>
-    /// <param name="currentTopPath">当前链顶 overlay 路径。</param>
-    /// <param name="snapshotPath">待创建的快照层路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    Task CreateSnapshotAsync(string currentTopPath, string snapshotPath, CancellationToken cancellationToken = default);
-
-    /// <summary>将链顶切换为指定快照层。</summary>
-    /// <param name="snapshotPath">快照层路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    Task RestoreAsync(string snapshotPath, CancellationToken cancellationToken = default);
-
     /// <summary>校验 overlay 的 backing file 指向仍有效。</summary>
     /// <param name="overlayPath">overlay 路径。</param>
     /// <param name="cancellationToken">取消令牌。</param>

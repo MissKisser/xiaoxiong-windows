@@ -571,23 +571,6 @@ internal sealed class ScriptedQcow2Manager : IQcow2Manager
         string overlayPath,
         CancellationToken cancellationToken = default) => throw new NotSupportedException();
 
-    /// <summary>本组测试不涉及快照创建。</summary>
-    /// <param name="currentTopPath">链顶 overlay 路径。</param>
-    /// <param name="snapshotPath">待创建的快照层路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>不返回。</returns>
-    public Task CreateSnapshotAsync(
-        string currentTopPath,
-        string snapshotPath,
-        CancellationToken cancellationToken = default) => throw new NotSupportedException();
-
-    /// <summary>本组测试不涉及恢复。</summary>
-    /// <param name="snapshotPath">快照层路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>不返回。</returns>
-    public Task RestoreAsync(string snapshotPath, CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-
     /// <summary>本组测试不涉及链式校验。</summary>
     /// <param name="overlayPath">overlay 路径。</param>
     /// <param name="cancellationToken">取消令牌。</param>

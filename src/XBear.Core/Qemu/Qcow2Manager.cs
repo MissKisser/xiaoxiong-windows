@@ -56,7 +56,6 @@ public sealed class Qcow2Manager : IQcow2Manager
     /// <summary>qcow2 格式名，用于格式探测结果的判定与命令行参数取值。</summary>
     public const string Qcow2Format = "qcow2";
 
-    private const string RestoredLayerSuffix = "-restored.qcow2";
     private const string ImportingSuffix = ".importing";
 
     /// <summary>
@@ -80,8 +79,6 @@ public sealed class Qcow2Manager : IQcow2Manager
     private readonly Action<string> _log;
     private readonly object _gate = new();
     private readonly Dictionary<string, SemaphoreSlim> _importGates =
-        new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, string> _liveTopsBySnapshot =
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>构造磁盘管理器。</summary>
@@ -133,82 +130,6 @@ public sealed class Qcow2Manager : IQcow2Manager
         string overlayPath,
         CancellationToken cancellationToken = default)
         => CreateLayerAsync(baseImagePath, overlayPath, cancellationToken);
-
-    /// <summary>在当前 overlay 之上再叠一层，用于快照。</summary>
-    /// <param name="currentTopPath">当前链顶 overlay 路径。</param>
-    /// <param name="snapshotPath">待创建的快照层路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <exception cref="XBearException">镜像不存在、base 格式不受支持或 qemu-img 执行失败时抛出 <see cref="ErrorCategory.Storage"/>。</exception>
-    public async Task CreateSnapshotAsync(
-        string currentTopPath,
-        string snapshotPath,
-        CancellationToken cancellationToken = default)
-    {
-        await CreateLayerAsync(currentTopPath, snapshotPath, cancellationToken).ConfigureAwait(false);
-
-        lock (_gate)
-        {
-            _liveTopsBySnapshot[NormalizePath(snapshotPath)] = NormalizePath(currentTopPath);
-        }
-    }
-
-    /// <summary>将快照层复制为新的链顶，快照文件本身保持不变。</summary>
-    /// <param name="snapshotPath">快照层路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <exception cref="XBearException">快照不存在或 qemu-img 执行失败时抛出 <see cref="ErrorCategory.Storage"/>。</exception>
-    public Task RestoreAsync(string snapshotPath, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(snapshotPath);
-
-        string? liveTop;
-        lock (_gate)
-        {
-            _liveTopsBySnapshot.TryGetValue(NormalizePath(snapshotPath), out liveTop);
-        }
-
-        var destination = string.IsNullOrWhiteSpace(liveTop) || !File.Exists(liveTop)
-            ? BuildFallbackRestoredPath(snapshotPath)
-            : liveTop;
-
-        return RestoreAsync(snapshotPath, destination, cancellationToken);
-    }
-
-    /// <summary>把快照层复制到指定的链顶位置。</summary>
-    /// <param name="snapshotPath">快照层路径。</param>
-    /// <param name="newTopPath">恢复后作为链顶的镜像路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <exception cref="XBearException">快照不存在或 qemu-img 执行失败时抛出 <see cref="ErrorCategory.Storage"/>。</exception>
-    public async Task RestoreAsync(
-        string snapshotPath,
-        string newTopPath,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(snapshotPath);
-
-        if (string.IsNullOrWhiteSpace(newTopPath))
-        {
-            throw new XBearException(ErrorCategory.Storage, "恢复目标镜像路径不能为空。");
-        }
-
-        if (!File.Exists(snapshotPath))
-        {
-            throw new XBearException(
-                ErrorCategory.Storage,
-                $"快照层不存在：{snapshotPath}",
-                "请确认快照文件仍在原位置，或改用其他可用的快照层恢复。");
-        }
-
-        var destinationDirectory = Path.GetDirectoryName(Path.GetFullPath(newTopPath));
-        if (!string.IsNullOrEmpty(destinationDirectory))
-        {
-            Directory.CreateDirectory(destinationDirectory);
-        }
-
-        await RunAsync(
-            new[] { "convert", "-O", "qcow2", snapshotPath, newTopPath },
-            snapshotPath,
-            cancellationToken).ConfigureAwait(false);
-    }
 
     /// <summary>校验 overlay 的 backing file 指向仍有效。</summary>
     /// <param name="overlayPath">overlay 路径。</param>
@@ -610,19 +531,6 @@ public sealed class Qcow2Manager : IQcow2Manager
         {
             return null;
         }
-    }
-
-    /// <summary>由快照路径派生一个不覆盖原快照的恢复目标。</summary>
-    /// <param name="snapshotPath">快照层路径。</param>
-    /// <returns>恢复目标镜像路径。</returns>
-    private static string BuildFallbackRestoredPath(string snapshotPath)
-    {
-        var directory = Path.GetDirectoryName(Path.GetFullPath(snapshotPath)) ?? string.Empty;
-        var stem = Path.GetFileNameWithoutExtension(snapshotPath);
-
-        return string.IsNullOrEmpty(directory)
-            ? stem + RestoredLayerSuffix
-            : Path.Combine(directory, stem + RestoredLayerSuffix);
     }
 
     /// <summary>归一化路径用于字典键比较，避免大小写与相对路径造成重复登记。</summary>

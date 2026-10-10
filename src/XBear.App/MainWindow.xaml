@@ -252,6 +252,16 @@
                                            Margin="{DynamicResource Space.Margin.BesideIcon}" />
                             </StackPanel>
                         </Button>
+                        <Button Style="{StaticResource SecondaryButton}" Command="{Binding OpenSnapshotsCommand}">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Snapshot}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding OpenSnapshotsText}"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
                         <Button Style="{StaticResource SecondaryButton}" Click="OnChooseDiagnosticsDirectory">
                             <StackPanel Orientation="Horizontal">
                                 <Image Source="{StaticResource Icon.Diagnostics}"

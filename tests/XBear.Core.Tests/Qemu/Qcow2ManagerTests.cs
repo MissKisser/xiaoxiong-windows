@@ -289,49 +289,6 @@ public sealed class Qcow2ManagerTests
         Assert.Contains(logs, line => line.Contains("耗时", StringComparison.Ordinal));
     }
 
-    /// <summary>qcow2 链顶上的快照层保持原有的 create 参数序列。</summary>
-    [Fact]
-    public async Task 快照层在qcow2链顶上保持原有创建参数()
-    {
-        using var workspace = new TempWorkspace();
-        var runner = new FakeQemuImgRunner();
-        var manager = CreateManager(workspace, runner);
-
-        var currentTop = workspace.GetPath("instance/overlay.qcow2");
-        File.WriteAllText(currentTop, "overlay");
-        runner.Formats[currentTop] = "qcow2";
-        var snapshotPath = workspace.GetPath("snapshots/snap-1.qcow2");
-
-        await manager.CreateSnapshotAsync(currentTop, snapshotPath);
-
-        var create = Assert.Single(runner.Invocations.Where(call => call[0] == "create"));
-        Assert.Equal(
-            new[] { "create", "-f", "qcow2", "-b", currentTop, "-F", "qcow2", snapshotPath },
-            create.ToArray());
-    }
-
-    /// <summary>快照恢复仍写回原链顶，产物保持 qcow2。</summary>
-    [Fact]
-    public async Task 恢复快照写回原链顶()
-    {
-        using var workspace = new TempWorkspace();
-        var runner = new FakeQemuImgRunner();
-        var manager = CreateManager(workspace, runner);
-
-        var currentTop = workspace.GetPath("instance/overlay.qcow2");
-        File.WriteAllText(currentTop, "overlay");
-        runner.Formats[currentTop] = "qcow2";
-        var snapshotPath = workspace.GetPath("snapshots/snap-1.qcow2");
-
-        await manager.CreateSnapshotAsync(currentTop, snapshotPath);
-        await manager.RestoreAsync(snapshotPath);
-
-        var convert = Assert.Single(runner.Invocations.Where(call => call[0] == "convert"));
-        Assert.Equal(
-            new[] { "convert", "-O", "qcow2", snapshotPath, currentTop },
-            convert.ToArray());
-    }
-
     /// <summary>链校验仍走 qemu-img check，并按退出码判定结果。</summary>
     [Fact]
     public async Task 校验链沿用check命令并按退出码判定()
@@ -366,22 +323,6 @@ public sealed class Qcow2ManagerTests
 
         Assert.Equal(ErrorCategory.Storage, exception.Category);
         Assert.DoesNotContain(runner.Invocations, call => call[0] == "check");
-    }
-
-    /// <summary>快照缺失时恢复仍归为存储错误。</summary>
-    [Fact]
-    public async Task 快照缺失时恢复报错()
-    {
-        using var workspace = new TempWorkspace();
-        var runner = new FakeQemuImgRunner();
-        var manager = CreateManager(workspace, runner);
-
-        var exception = await Assert.ThrowsAsync<XBearException>(
-            () => manager.RestoreAsync(workspace.GetPath("snapshots/missing.qcow2")));
-
-        Assert.Equal(ErrorCategory.Storage, exception.Category);
-        Assert.False(string.IsNullOrWhiteSpace(exception.Remediation));
-        Assert.DoesNotContain(runner.Invocations, call => call[0] == "convert");
     }
 
     /// <summary>构造一个只指向替身执行边界的磁盘管理器。</summary>

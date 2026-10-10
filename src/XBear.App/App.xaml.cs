@@ -163,7 +163,8 @@ public partial class App : Application
                 projectionWindows: _services.ProjectionWindows,
                 fileTransferWindows: _services.FileTransferWindows,
                 applicationWindows: _services.ApplicationWindows,
-                moduleWindows: _services.ModuleWindows);
+                moduleWindows: _services.ModuleWindows,
+                snapshotWindows: _services.SnapshotWindows);
 
             // 投屏窗口归属主窗口，主窗口最小化时投屏一并最小化，任务栏不出现多余条目。
             ((MainViewModel)main.DataContext).ProjectionOwner = main;

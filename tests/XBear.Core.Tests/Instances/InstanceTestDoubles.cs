@@ -248,24 +248,6 @@ internal sealed class FakeQcow2Manager : IQcow2Manager
     }
 
     /// <summary>
-    /// 不做实际快照。
-    /// </summary>
-    /// <param name="currentTopPath">当前链顶路径。</param>
-    /// <param name="snapshotPath">快照路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>异步任务。</returns>
-    public Task CreateSnapshotAsync(string currentTopPath, string snapshotPath, CancellationToken cancellationToken = default) =>
-        Task.CompletedTask;
-
-    /// <summary>
-    /// 不做实际还原。
-    /// </summary>
-    /// <param name="snapshotPath">快照路径。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>异步任务。</returns>
-    public Task RestoreAsync(string snapshotPath, CancellationToken cancellationToken = default) => Task.CompletedTask;
-
-    /// <summary>
     /// 始终返回链有效。
     /// </summary>
     /// <param name="overlayPath">overlay 路径。</param>
