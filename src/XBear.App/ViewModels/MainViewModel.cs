@@ -24,6 +24,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly Dictionary<string, ImageSpec> _images;
     private CancellationTokenSource? _importCts;
     private InputProbeResult _inputChannel = new(InputChannelKind.Unknown);
+    private readonly Views.IProjectionWindowHost? _projectionWindows;
 
     [ObservableProperty]
     private InstanceListItemViewModel? _selected;
@@ -75,6 +76,7 @@ public sealed partial class MainViewModel : ObservableObject
     /// <param name="version">版本契约文档，为空时从诊断包导出器获取。</param>
     /// <param name="importer">base 镜像导入服务，为 null 时使用默认镜像根目录下的真实导入。</param>
     /// <param name="bootAssetExtractor">引导资产提取服务，为 null 时不执行引导资产提取与定制。</param>
+    /// <param name="projectionWindows">投屏窗口宿主，为 null 时不提供投屏入口。</param>
     public MainViewModel(
         IInstanceRepository repository,
         InstanceManager? manager,
@@ -83,7 +85,8 @@ public sealed partial class MainViewModel : ObservableObject
         TerminologyCatalog terms,
         VersionDocument? version = null,
         BaseImageImportService? importer = null,
-        BootAssetExtractorService? bootAssetExtractor = null)
+        BootAssetExtractorService? bootAssetExtractor = null,
+        Views.IProjectionWindowHost? projectionWindows = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(images);
@@ -97,6 +100,7 @@ public sealed partial class MainViewModel : ObservableObject
         _terms = terms;
         _importer = importer ?? new BaseImageImportService(BaseImageImportService.DefaultImagesRoot);
         _bootAssetExtractor = bootAssetExtractor;
+        _projectionWindows = projectionWindows;
 
         VersionDocument versionDoc = version ?? diagnostics.Version;
         ProductVersion = versionDoc.Product.Version;
@@ -243,6 +247,46 @@ public sealed partial class MainViewModel : ObservableObject
         _manager is not null &&
         Selected is not null &&
         InstanceStateMapper.Describe(Selected.State).CanStop;
+
+    /// <summary>投屏入口是否可用。投屏要求实例处于运行态，未运行时不得开放。</summary>
+    public bool CanOpenProjection =>
+        _projectionWindows is not null &&
+        Selected is not null &&
+        Selected.State == InstanceState.Running;
+
+    /// <summary>打开投屏按钮文案。</summary>
+    public string OpenProjectionText => $"打开{_terms.Projection}";
+
+    /// <summary>
+    /// 为选中且运行中的实例打开投屏窗口。同一实例已开投屏时置前而不是重复打开。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenProjection))]
+    public void OpenProjection()
+    {
+        if (_projectionWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _projectionWindows.Open(Selected.Id, Selected.DisplayName, ProjectionOwner);
+    }
+
+    /// <summary>
+    /// 关闭选中实例的投屏窗口。未打开时不做任何事。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenProjection))]
+    public void CloseSelectedProjection()
+    {
+        if (_projectionWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _projectionWindows.Close(Selected.Id);
+    }
+
+    /// <summary>投屏窗口的宿主窗口，供视图模型在开窗时指定归属。</summary>
+    public Window? ProjectionOwner { get; set; }
 
     /// <summary>
     /// 从仓库加载实例列表并刷新选中项。
@@ -760,6 +804,8 @@ public sealed partial class MainViewModel : ObservableObject
 
         StartSelectedCommand.NotifyCanExecuteChanged();
         StopSelectedCommand.NotifyCanExecuteChanged();
+        OpenProjectionCommand.NotifyCanExecuteChanged();
+        CloseSelectedProjectionCommand.NotifyCanExecuteChanged();
     }
 
     private void RefreshDetail()
@@ -853,6 +899,16 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         item.ApplyState(e.NewState);
+
+        if (e.NewState is not InstanceState.Running)
+        {
+            // 实例已停止时投屏画面不再更新，投屏窗口必须随之关闭，
+            // 否则窗口会一直停在最后一帧上，让人以为画面还活着。
+            _projectionWindows?.Close(e.InstanceId);
+        }
+
+        OpenProjectionCommand.NotifyCanExecuteChanged();
+        CloseSelectedProjectionCommand.NotifyCanExecuteChanged();
 
         if (Selected is not null && string.Equals(Selected.Id, e.InstanceId, StringComparison.Ordinal))
         {

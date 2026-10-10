@@ -132,6 +132,16 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
+        // 退出时必须释放投屏服务：它持有到实例的 VNC 与 QMP 连接，
+        // 不随进程一并回收会留下半开的连接，下次启动时端口可能仍被占用。
+        Exit += async (_, _) =>
+        {
+            if (_services is not null)
+            {
+                await _services.Projection.DisposeAsync().ConfigureAwait(true);
+            }
+        };
+
         try
         {
             SpecLoader loader = SpecLoader.Default;
@@ -149,7 +159,11 @@ public partial class App : Application
                 _services.Terms,
                 version: null,
                 importer: _services.Importer,
-                bootAssetExtractor: _services.BootAssetExtractor);
+                bootAssetExtractor: _services.BootAssetExtractor,
+                projectionWindows: _services.ProjectionWindows);
+
+            // 投屏窗口归属主窗口，主窗口最小化时投屏一并最小化，任务栏不出现多余条目。
+            ((MainViewModel)main.DataContext).ProjectionOwner = main;
 
             if (Theme.WindowIcon.Create(Resources) is BitmapSource icon)
             {

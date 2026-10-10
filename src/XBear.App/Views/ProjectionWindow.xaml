@@ -1,0 +1,108 @@
+<Window x:Class="XBear.App.Views.ProjectionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding WindowTitle}"
+        Height="760" Width="1020"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Token.Color.Surface.Base}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 状态栏：投屏会话状态、分辨率与实测帧率并列，未取到首帧时不谎报。 -->
+        <Border Grid.Row="0"
+                Style="{DynamicResource Card}"
+                Margin="{DynamicResource Token.Space.Md}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <Image Grid.Column="0"
+                       Source="{StaticResource Icon.Projection}"
+                       Style="{StaticResource SectionHeaderIcon}"
+                       ToolTip="投屏" />
+
+                <TextBlock Grid.Column="1"
+                           Text="{Binding StatusText}"
+                           FontWeight="{DynamicResource Token.Weight.Medium}"
+                           VerticalAlignment="Center"
+                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+
+                <TextBlock Grid.Column="2"
+                           Text="{Binding ResolutionText}"
+                           Style="{StaticResource CaptionText}"
+                           VerticalAlignment="Center" />
+
+                <TextBlock Grid.Column="3"
+                           Text="{Binding FrameRateText}"
+                           Style="{StaticResource CaptionText}"
+                           VerticalAlignment="Center"
+                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+            </Grid>
+        </Border>
+
+        <!--
+            画面呈现面。等比缩放并居中由呈现面的 Stretch 承担，
+            指针坐标换算按同一套落位矩形进行，因此点按位置与呈现位置严格一致。
+            焦点落在本元素上，键盘事件才能被本窗口优先消费。
+        -->
+        <Border x:Name="SurfaceHost"
+                Grid.Row="1"
+                Background="{DynamicResource Token.Color.Surface.Overlay}"
+                BorderBrush="{DynamicResource Token.Color.Surface.Overlay}"
+                BorderThickness="1"
+                Margin="{DynamicResource Token.Space.Md}"
+                ClipToBounds="True"
+                Focusable="True"
+                MouseLeftButtonDown="OnSurfaceMouseDown"
+                MouseMove="OnSurfaceMouseMove"
+                MouseLeftButtonUp="OnSurfaceMouseUp"
+                MouseWheel="OnSurfaceMouseWheel"
+                PreviewKeyDown="OnSurfaceKeyDown"
+                PreviewKeyUp="OnSurfaceKeyUp">
+            <Grid>
+                <Image x:Name="FrameImage"
+                       Stretch="Uniform"
+                       SnapsToDevicePixels="True" />
+
+                <!-- 首帧到达前的等待态：品牌标识加说明，避免用户对着空白窗口等待。 -->
+                <Border Background="{DynamicResource Token.Color.Surface.Overlay}"
+                        Visibility="{Binding HasFrame, Converter={StaticResource BoolToVisibility}, ConverterParameter=invert}">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Image Source="{StaticResource Brand.Mark}"
+                               Width="{DynamicResource Brand.Mark.Size.Lg}"
+                               Height="{DynamicResource Brand.Mark.Size.Lg}"
+                               HorizontalAlignment="Center" />
+                        <TextBlock Text="{Binding StatusText}"
+                                   Style="{StaticResource HintText}"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   Margin="{DynamicResource Space.Margin.HeaderStack}" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- 失败提示：会话终止或输入投递失败都如实呈现原因，不静默吞掉。 -->
+        <Border Grid.Row="2"
+                Style="{DynamicResource RiskBanner}"
+                Visibility="{Binding HasFailure, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel Orientation="Horizontal">
+                <Image Source="{StaticResource Icon.ErrorEnvironment}"
+                       Style="{StaticResource SectionHeaderIcon}"
+                       VerticalAlignment="Center" />
+                <TextBlock Text="{Binding FailureText}"
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"
+                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

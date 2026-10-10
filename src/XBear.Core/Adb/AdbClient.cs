@@ -12,7 +12,7 @@ namespace XBear.Core.Adb;
 /// <remarks>
 /// 单条连接上串行执行操作；传输文件时按 64KB 分块流式读写，不会把整个文件读进内存。
 /// </remarks>
-public sealed class AdbClient : IAdbClient
+public sealed class AdbClient : IAdbFileTransferClient
 {
     private const int MaxChunkSize = 64 * 1024;
     private const string ExitMarker = "__XB_EXIT__";
@@ -225,7 +225,20 @@ public sealed class AdbClient : IAdbClient
     /// <param name="remotePath">实例内目标路径。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <exception cref="XBearException">本地文件不可读时分类为 <see cref="ErrorCategory.Storage"/>；传输被 adbd 拒绝时分类为 <see cref="ErrorCategory.Protocol"/>。</exception>
-    public async Task PushAsync(string localPath, string remotePath, CancellationToken cancellationToken = default)
+    public Task PushAsync(string localPath, string remotePath, CancellationToken cancellationToken = default) =>
+        PushAsync(localPath, remotePath, null, cancellationToken);
+
+    /// <summary>以 sync 子协议把宿主文件推送到实例，并在复制过程中上报累计字节数。</summary>
+    /// <param name="localPath">宿主文件路径。</param>
+    /// <param name="remotePath">实例内目标路径。</param>
+    /// <param name="progress">进度接收方，为 null 时不上报。回调给出的是累计已复制字节数。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <exception cref="XBearException">本地文件不可读时分类为 <see cref="ErrorCategory.Storage"/>；传输被 adbd 拒绝时分类为 <see cref="ErrorCategory.Protocol"/>。</exception>
+    public async Task PushAsync(
+        string localPath,
+        string remotePath,
+        IProgress<long>? progress,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(localPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(remotePath);
@@ -240,7 +253,7 @@ public sealed class AdbClient : IAdbClient
 
             await OpenSyncAsync(stream, token).ConfigureAwait(false);
             using FileStream file = OpenLocalFile(localPath);
-            await SendFileAsync(stream, file, localPath, remotePath, token).ConfigureAwait(false);
+            await SendFileAsync(stream, file, localPath, remotePath, progress, token).ConfigureAwait(false);
         }
         finally
         {
@@ -253,7 +266,20 @@ public sealed class AdbClient : IAdbClient
     /// <param name="localPath">宿主目标路径。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <exception cref="XBearException">远端文件不存在时分类为 <see cref="ErrorCategory.Protocol"/>；本地写入失败时分类为 <see cref="ErrorCategory.Storage"/>。</exception>
-    public async Task PullAsync(string remotePath, string localPath, CancellationToken cancellationToken = default)
+    public Task PullAsync(string remotePath, string localPath, CancellationToken cancellationToken = default) =>
+        PullAsync(remotePath, localPath, null, cancellationToken);
+
+    /// <summary>以 sync 子协议把实例内文件拉取到宿主，并在复制过程中上报累计字节数。</summary>
+    /// <param name="remotePath">实例内源路径。</param>
+    /// <param name="localPath">宿主目标路径。</param>
+    /// <param name="progress">进度接收方，为 null 时不上报。回调给出的是累计已复制字节数。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <exception cref="XBearException">远端文件不存在时分类为 <see cref="ErrorCategory.Protocol"/>；本地写入失败时分类为 <see cref="ErrorCategory.Storage"/>。</exception>
+    public async Task PullAsync(
+        string remotePath,
+        string localPath,
+        IProgress<long>? progress,
+        CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(remotePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(localPath);
@@ -268,7 +294,68 @@ public sealed class AdbClient : IAdbClient
 
             await OpenSyncAsync(stream, token).ConfigureAwait(false);
             using FileStream file = CreateLocalFile(localPath);
-            await ReceiveFileAsync(stream, file, remotePath, token).ConfigureAwait(false);
+            await ReceiveFileAsync(stream, file, remotePath, progress, token).ConfigureAwait(false);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>以 sync 子协议的 STAT 查询实例内某个路径的元信息。</summary>
+    /// <param name="remotePath">实例内路径。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>
+    /// 路径存在时返回其模式位、字节数与最后修改时间；
+    /// adbd 回答不存在时返回 null，让调用方按「取不到」而非失败处理。
+    /// </returns>
+    /// <exception cref="XBearException">回包类型未知或连接中断时分类为 <see cref="ErrorCategory.Protocol"/>。</exception>
+    public async Task<AdbRemoteFileInfo?> StatAsync(
+        string remotePath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(remotePath);
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            NetworkStream stream = RequireStream();
+            using CancellationTokenSource linked = CreateLinkedToken(cancellationToken);
+            CancellationToken token = linked.Token;
+
+            await OpenSyncAsync(stream, token).ConfigureAwait(false);
+            byte[] payload = Encoding.UTF8.GetBytes(remotePath);
+            await WriteSyncHeaderAsync(stream, "STAT", payload, token).ConfigureAwait(false);
+
+            byte[] idBytes = await ReadExactAsync(stream, 4, token).ConfigureAwait(false);
+            string kind = Encoding.ASCII.GetString(idBytes);
+
+            if (kind == "FAIL")
+            {
+                byte[] lenBytes = await ReadExactAsync(stream, 4, token).ConfigureAwait(false);
+                int length = BinaryPrimitives.ReadInt32LittleEndian(lenBytes);
+                string message = await ReadSyncMessageAsync(stream, length, token).ConfigureAwait(false);
+                throw new XBearException(ErrorCategory.Protocol, $"adbd 拒绝 STAT：{message}");
+            }
+
+            if (kind != "STAT")
+            {
+                throw new XBearException(ErrorCategory.Protocol, $"adbd 返回了未知状态 {kind}。");
+            }
+
+            // STAT 回包固定为 12 字节：模式位(4) + 字节数(4) + 最后修改时间(4)。
+            byte[] body = await ReadExactAsync(stream, 12, token).ConfigureAwait(false);
+            uint mode = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(0, 4));
+            uint size = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(4, 4));
+            uint mtime = BinaryPrimitives.ReadUInt32LittleEndian(body.AsSpan(8, 4));
+
+            if (mode == 0 && size == 0 && mtime == 0)
+            {
+                return null;
+            }
+
+            return new AdbRemoteFileInfo(mode, size, mtime);
         }
         finally
         {
@@ -387,6 +474,11 @@ public sealed class AdbClient : IAdbClient
             }
             catch (Exception ex) when (ex is IOException or ObjectDisposedException)
             {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException("读取 adbd 响应已被取消。", ex, cancellationToken);
+                }
+
                 throw new XBearException(ErrorCategory.Protocol, "读取 adbd 响应时连接中断。", null, ex);
             }
 
@@ -506,6 +598,11 @@ public sealed class AdbClient : IAdbClient
         }
         catch (Exception ex) when (ex is IOException or ObjectDisposedException)
         {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException("读取 adbd 数据已被取消。", ex, cancellationToken);
+            }
+
             throw new XBearException(ErrorCategory.Protocol, "读取 adbd 数据时连接中断。", null, ex);
         }
     }
@@ -616,6 +713,7 @@ public sealed class AdbClient : IAdbClient
         FileStream file,
         string localPath,
         string remotePath,
+        IProgress<long>? progress,
         CancellationToken cancellationToken)
     {
         // 打开时就固定最后修改时间，避免读到与本次传输不一致的值。
@@ -631,6 +729,7 @@ public sealed class AdbClient : IAdbClient
         // 按 64KB 分块流式发送。DATA 块服务端不回任何应答，因此这里不读响应。
         // 读到 0 字节表示传输结束，任一块都不会把整个文件读进内存。
         byte[] buffer = new byte[MaxChunkSize];
+        long transferred = 0;
         while (true)
         {
             int read = await file.ReadAsync(buffer.AsMemory(), cancellationToken).ConfigureAwait(false);
@@ -641,6 +740,10 @@ public sealed class AdbClient : IAdbClient
 
             await stream.WriteAsync(BuildDataHeader(read), cancellationToken).ConfigureAwait(false);
             await stream.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+
+            // 进度按累计字节数给出，调用方据此呈现「已复制多少」而不必自行换算分块。
+            transferred += read;
+            progress?.Report(transferred);
         }
 
         // DONE 携带最后修改时间，服务端在此之后才回 OKAY，其长度可忽略。
@@ -659,6 +762,7 @@ public sealed class AdbClient : IAdbClient
         Stream stream,
         FileStream file,
         string remotePath,
+        IProgress<long>? progress,
         CancellationToken cancellationToken)
     {
         byte[] payload = Encoding.UTF8.GetBytes(remotePath);
@@ -667,6 +771,7 @@ public sealed class AdbClient : IAdbClient
         // RECV 的首个回包固定是 OKAY 头（长度为文件总大小）或 FAIL 头。
         await ReadSyncStatusAsync(stream, cancellationToken).ConfigureAwait(false);
 
+        long transferred = 0;
         while (true)
         {
             // 服务端回包同样是 8 字节头：4 字节命令字 + 4 字节小端长度。
@@ -682,6 +787,8 @@ public sealed class AdbClient : IAdbClient
                 }
 
                 await CopyExactlyAsync(stream, file, length, cancellationToken).ConfigureAwait(false);
+                transferred += length;
+                progress?.Report(transferred);
                 continue;
             }
 
@@ -749,7 +856,25 @@ public sealed class AdbClient : IAdbClient
         int remaining = count;
         while (remaining > 0)
         {
-            int read = await source.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+            int read;
+            try
+            {
+                read = await source.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, remaining)), cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (ex is IOException or ObjectDisposedException)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    throw new OperationCanceledException("读取 adbd 数据已被取消。", ex, cancellationToken);
+                }
+
+                throw new XBearException(ErrorCategory.Protocol, "读取 adbd 数据时连接中断。", null, ex);
+            }
+
             if (read == 0)
             {
                 throw new XBearException(ErrorCategory.Protocol, "adbd 在分块传输中途关闭了连接。");

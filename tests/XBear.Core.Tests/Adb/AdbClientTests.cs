@@ -130,6 +130,35 @@ public sealed class AdbClientTests : IDisposable
     }
 
     [Fact]
+    public async Task StatAsync_存在的文件返回元信息()
+    {
+        byte[] content = Encoding.UTF8.GetBytes("stat 内容");
+        await using var server = new FakeAdbdServer();
+        server.SetFile("/sdcard/Download/test.txt", content);
+
+        await using var client = new AdbClient();
+        await client.ConnectAsync(server.Port);
+
+        var info = await client.StatAsync("/sdcard/Download/test.txt");
+
+        Assert.NotNull(info);
+        Assert.Equal(content.Length, info.Size);
+        Assert.True(info.IsRegularFile);
+    }
+
+    [Fact]
+    public async Task StatAsync_不存在的文件返回空()
+    {
+        await using var server = new FakeAdbdServer();
+        await using var client = new AdbClient();
+        await client.ConnectAsync(server.Port);
+
+        var info = await client.StatAsync("/sdcard/Download/missing.bin");
+
+        Assert.Null(info);
+    }
+
+    [Fact]
     public async Task Push与Pull_二进制内容逐字节一致()
     {
         var random = new Random(20260907);

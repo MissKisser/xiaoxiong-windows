@@ -68,6 +68,64 @@ public interface IAdbClient : IAsyncDisposable
     Task PullAsync(string remotePath, string localPath, CancellationToken cancellationToken = default);
 }
 
+/// <summary>
+/// 文件传输所需的 adb 能力：在 <see cref="IAdbClient"/> 之上补上 sync 子协议的查询，
+/// 并让推送与拉取在复制过程中按累计字节数上报进度。
+/// </summary>
+/// <remarks>
+/// 与 <see cref="IAdbClient"/> 分开声明，使只做交互与输入投递的调用方不必实现
+/// 文件传输能力，而传输通路仍以同一套 sync 协议实现为准。
+/// </remarks>
+public interface IAdbFileTransferClient : IAdbClient
+{
+    /// <summary>
+    /// 以 sync 子协议查询实例内某个路径的元信息。
+    /// </summary>
+    /// <param name="remotePath">实例内路径。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>
+    /// 该路径存在时返回其元信息；adbd 报告路径不存在时返回 null。
+    /// </returns>
+    Task<AdbRemoteFileInfo?> StatAsync(string remotePath, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 推送文件到实例，并在复制过程中按累计字节数上报进度。
+    /// </summary>
+    /// <param name="localPath">宿主文件路径。</param>
+    /// <param name="remotePath">实例内目标路径。</param>
+    /// <param name="progress">进度接收方，为 null 时不上报。回调给出的是累计已复制字节数。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task PushAsync(string localPath, string remotePath, IProgress<long>? progress, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// 从实例拉取文件，并在复制过程中按累计字节数上报进度。
+    /// </summary>
+    /// <param name="remotePath">实例内源路径。</param>
+    /// <param name="localPath">宿主目标路径。</param>
+    /// <param name="progress">进度接收方，为 null 时不上报。回调给出的是累计已复制字节数。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    Task PullAsync(string remotePath, string localPath, IProgress<long>? progress, CancellationToken cancellationToken = default);
+}
+
+/// <summary>实例内某个路径的元信息，取自 adb sync 子协议的 STAT 回包。</summary>
+/// <param name="Mode">POSIX 模式位，目录与普通文件的高位不同。</param>
+/// <param name="Size">字节数，目录为 0。</param>
+/// <param name="ModifiedTimeSeconds">最后修改时间的 Unix 秒数。</param>
+public sealed record AdbRemoteFileInfo(uint Mode, long Size, long ModifiedTimeSeconds)
+{
+    /// <summary>POSIX 目录模式位。</summary>
+    public const uint DirectoryMode = 0x4000;
+
+    /// <summary>POSIX 普通文件模式位。</summary>
+    public const uint RegularFileMode = 0x8000;
+
+    /// <summary>该路径是否为目录。</summary>
+    public bool IsDirectory => (Mode & 0xF000) == DirectoryMode;
+
+    /// <summary>该路径是否为普通文件。</summary>
+    public bool IsRegularFile => (Mode & 0xF000) == RegularFileMode;
+}
+
 /// <summary>输入通道，向实例投递触摸与按键。</summary>
 public interface IInputChannel : IAsyncDisposable
 {

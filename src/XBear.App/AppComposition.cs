@@ -7,6 +7,7 @@ using XBear.Core.Abstractions;
 using XBear.Core.Diagnostics;
 using XBear.Core.Identity;
 using XBear.Core.Instances;
+using XBear.Core.Projection;
 using XBear.Core.Qemu;
 using XBear.Core.Spec;
 
@@ -91,6 +92,14 @@ public static class AppComposition
         var bootAssetExtractor = new BootAssetExtractorService(imagesRoot, initrdCustomizer);
         var baseImageImporter = new BaseImageImportService(imagesRoot);
 
+        // 投屏服务的端口与运行态来源就是编排器本身：实例启动后端口组已登记，
+        // 运行态也由编排器裁定，投屏不自建另一份实例状态。
+        IProjectionService projection = new ProjectionService(
+            id => manager.AllocatedPorts.TryGetValue(id, out AllocatedPorts? ports) ? ports : null,
+            manager.GetState);
+
+        var projectionWindows = new Views.ProjectionWindowHost(projection, terms);
+
         return new AppServices(
             repository,
             manager,
@@ -104,7 +113,9 @@ public static class AppComposition
             outcome.RejectedManifests,
             bootAssetExtractor,
             initrdCustomizer,
-            baseImageImporter);
+            baseImageImporter,
+            projection,
+            projectionWindows);
     }
 
     /// <summary>
@@ -207,6 +218,8 @@ public sealed record ManifestRejection(string ManifestName, string Reason);
 /// <param name="BootAssetExtractor">引导资产提取服务。</param>
 /// <param name="InitrdCustomizer">initrd 定制服务。</param>
 /// <param name="Importer">base 镜像导入服务。</param>
+/// <param name="Projection">投屏服务。</param>
+/// <param name="ProjectionWindows">投屏窗口宿主。</param>
 public sealed record AppServices(
     IInstanceRepository Repository,
     InstanceManager Manager,
@@ -220,4 +233,6 @@ public sealed record AppServices(
     IReadOnlyList<ManifestRejection> RejectedManifests,
     BootAssetExtractorService BootAssetExtractor,
     InitrdCustomizerService InitrdCustomizer,
-    BaseImageImportService Importer);
+    BaseImageImportService Importer,
+    IProjectionService Projection,
+    Views.IProjectionWindowHost ProjectionWindows);

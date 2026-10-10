@@ -25,6 +25,7 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly List<byte[]> _rawRequests = [];
     private readonly List<string> _requests = [];
+    private readonly List<string> _shellCommands = [];
     private readonly List<byte[]> _rawSyncFrames = [];
     private readonly List<string> _syncCommands = [];
     private readonly Dictionary<string, byte[]> _files = new(StringComparer.Ordinal);
@@ -63,8 +64,23 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
     /// </summary>
     public bool StallHandshake { get; set; }
 
+    /// <summary>收到 STAT 请求后是否故意返回 FAIL，用于验证取不到源文件大小时的降级逻辑。</summary>
+    public bool DisableStat { get; set; }
+
     /// <summary>客户端发出的请求负载原文。</summary>
     public IReadOnlyList<string> Requests => _requests;
+
+    /// <summary>服务端收到的 shell 命令行，已剥除退出码标记，按接收顺序排列。</summary>
+    public IReadOnlyList<string> ShellCommands
+    {
+        get
+        {
+            lock (_shellCommands)
+            {
+                return _shellCommands.ToArray();
+            }
+        }
+    }
 
     /// <summary>客户端发出的请求原始帧，含 4 字节小端长度前缀。</summary>
     public IReadOnlyList<byte[]> RawRequests => _rawRequests;
@@ -139,6 +155,19 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
         lock (_files)
         {
             _files[path] = content;
+        }
+    }
+
+    /// <summary>移除实例内的文件，用于模拟 rm 命令。</summary>
+    /// <param name="path">实例内路径。</param>
+    /// <returns>确实存在并已删除时返回 true。</returns>
+    public bool RemoveFile(string path)
+    {
+        lock (_files)
+        {
+            _mtimes.Remove(path);
+            _modes.Remove(path);
+            return _files.Remove(path);
         }
     }
 
@@ -292,7 +321,34 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
             return false;
         }
 
-        ShellResponse? response = ShellHandler?.Invoke(command) ?? new ShellResponse(string.Empty, 0);
+        lock (_shellCommands)
+        {
+            _shellCommands.Add(command);
+        }
+
+        if (command.StartsWith("rm -f ", StringComparison.Ordinal))
+        {
+            string path = command["rm -f ".Length..].Trim();
+            RemoveFile(path);
+        }
+
+        ShellResponse? response = ShellHandler?.Invoke(command);
+        if (response is null)
+        {
+            if (command.StartsWith("test -e ", StringComparison.Ordinal) || command.StartsWith("test -f ", StringComparison.Ordinal))
+            {
+                string targetPath = command[8..].Trim().Trim('"');
+                lock (_files)
+                {
+                    int code = _files.ContainsKey(targetPath) ? 0 : 1;
+                    response = new ShellResponse(string.Empty, code);
+                }
+            }
+            else
+            {
+                response = new ShellResponse(string.Empty, 0);
+            }
+        }
         byte[] output = Encoding.UTF8.GetBytes(response.Output + ExitMarker + response.ExitCode + "\n");
         await stream.WriteAsync(output, _cts.Token).ConfigureAwait(false);
         await stream.FlushAsync(_cts.Token).ConfigureAwait(false);
@@ -386,29 +442,34 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                 case "STAT":
                 {
                     string statPath = Encoding.UTF8.GetString(payload);
+                    if (DisableStat)
+                    {
+                        await SendSyncFailAsync(stream, "STAT disabled").ConfigureAwait(false);
+                        break;
+                    }
+
                     byte[]? content = null;
                     uint mode = 0;
+                    uint mtime = 0;
                     lock (_files)
                     {
-                        _files.TryGetValue(statPath, out content);
-                        _modes.TryGetValue(statPath, out mode);
+                        if (_files.TryGetValue(statPath, out content))
+                        {
+                            _modes.TryGetValue(statPath, out mode);
+                            _mtimes.TryGetValue(statPath, out mtime);
+                            if (mode == 0)
+                            {
+                                mode = 0x81A4; // S_IFREG | 0644
+                            }
+                        }
                     }
 
-                    if (content is null)
-                    {
-                        await SendSyncFailAsync(stream, $"No such file or directory: {statPath}").ConfigureAwait(false);
-                        return false;
-                    }
-
-                    // STAT 回包为「STAT + 长度 1 + 模式/大小/时间」。
-                    var response = new byte[8 + 16];
+                    // STAT 回包为 16 字节：「STAT」+ mode(4) + size(4) + mtime(4)。文件不存在时各数值为 0。
+                    var response = new byte[16];
                     Encoding.ASCII.GetBytes("STAT").CopyTo(response, 0);
-                    BinaryPrimitives.WriteUInt32LittleEndian(response.AsSpan(4, 4), 1);
-                    BinaryPrimitives.WriteUInt32LittleEndian(response.AsSpan(8, 4), mode);
-                    BinaryPrimitives.WriteUInt32LittleEndian(response.AsSpan(12, 4), (uint)content.Length);
-                    uint mtime = 0;
-                    _mtimes.TryGetValue(statPath, out mtime);
-                    BinaryPrimitives.WriteUInt32LittleEndian(response.AsSpan(16, 4), mtime);
+                    BinaryPrimitives.WriteUInt32LittleEndian(response.AsSpan(4, 4), mode);
+                    BinaryPrimitives.WriteUInt32LittleEndian(response.AsSpan(8, 4), (uint)(content?.Length ?? 0));
+                    BinaryPrimitives.WriteUInt32LittleEndian(response.AsSpan(12, 4), mtime);
                     await WriteAndFlushAsync(stream, response).ConfigureAwait(false);
                     break;
                 }
