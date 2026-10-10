@@ -38,7 +38,9 @@ public class FidelitySemanticsTests
             { "P1_root" },
             { "P2_systemWrite" },
             { "P3_moduleFlash" },
-            { "P5_rootPersist" }
+            { "P4_imageSwap" },
+            { "P5_rootPersist" },
+            { "P6_armApp" }
         };
 
     [Fact]
@@ -107,9 +109,9 @@ public class FidelitySemanticsTests
     [InlineData("P1_root", "pass")]
     [InlineData("P2_systemWrite", "pass")]
     [InlineData("P3_moduleFlash", "pass")]
-    [InlineData("P4_imageSwap", "untested")]
+    [InlineData("P4_imageSwap", "pass")]
     [InlineData("P5_rootPersist", "pass")]
-    [InlineData("P6_armApp", "untested")]
+    [InlineData("P6_armApp", "pass")]
     public void SampleFidelityReflectsMeasuredFacts(string key, string expected)
     {
         var value = JsonNode.Parse(SpecTestHost.ImageJson())!["verified"]!["fidelity"]![key]!
@@ -156,9 +158,9 @@ public class FidelitySemanticsTests
         Assert.Equal(VerificationState.Pass, fidelity.P1Root);
         Assert.Equal(VerificationState.Pass, fidelity.P2SystemWrite);
         Assert.Equal(VerificationState.Pass, fidelity.P3ModuleFlash);
-        Assert.Equal(VerificationState.Untested, fidelity.P4ImageSwap);
+        Assert.Equal(VerificationState.Pass, fidelity.P4ImageSwap);
         Assert.Equal(VerificationState.Pass, fidelity.P5RootPersist);
-        Assert.Equal(VerificationState.Untested, fidelity.P6ArmApp);
+        Assert.Equal(VerificationState.Pass, fidelity.P6ArmApp);
     }
 
     /// <summary>

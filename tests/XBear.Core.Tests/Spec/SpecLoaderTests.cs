@@ -438,12 +438,22 @@ public class BaselineContractTests
             baseline.PendingMetrics().Count);
     }
 
+    /// <summary>
+    /// 受阻口径随实测定向收敛：没有实测值的指标必须逐条声明受阻原因，
+    /// 已回填实测值的指标则不得再声明受阻。两集合恒等，因此受阻集合允许为空——
+    /// 全部指标都有实测值时不应凭空造出一条受阻理由；
+    /// 但只要将来新增指标或某项退回未测，受阻集合就必须与待测集合逐条对应。
+    /// </summary>
     [Fact]
     public void BlockedMetricsCarryAReason()
     {
-        var blocked = SpecTestHost.Loader.LoadBaseline().BlockedMetrics();
+        var baseline = SpecTestHost.Loader.LoadBaseline();
+        var blocked = baseline.BlockedMetrics();
 
-        Assert.NotEmpty(blocked);
+        Assert.Equal(
+            baseline.PendingMetrics().Select(m => m.Id).OrderBy(id => id, StringComparer.Ordinal),
+            blocked.Select(m => m.Id).OrderBy(id => id, StringComparer.Ordinal));
+
         Assert.All(blocked, m =>
         {
             Assert.True(m.IsBlocked());

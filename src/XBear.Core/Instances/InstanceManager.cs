@@ -36,8 +36,8 @@ public sealed class InstanceStateChangedEventArgs : EventArgs
 }
 
 /// <summary>
-/// 实例生命周期编排。负责启动序列的状态推进、overlay 准备、端口分配与进程拉起，
-/// 以及停止序列的进程终止与端口释放。
+/// 实例生命周期编排。负责启动序列的状态推进、overlay 准备、端口分配与进程拉起、
+/// 调试通路就绪后的净桌面初始化，以及停止序列的进程终止与端口释放。
 /// 启动任一环节失败时统一置为 <see cref="InstanceState.Faulted"/>、释放已占用端口并抛出带处置建议的异常，
 /// 保证失败后可直接重试启动；用户主动取消不属于失败，端口同样释放但状态回到 <see cref="InstanceState.Stopped"/>。
 /// </summary>
@@ -51,6 +51,39 @@ public sealed class InstanceManager
 
     /// <summary>单次 adb 连接尝试的等待上限。</summary>
     public static readonly TimeSpan DefaultDebugChannelAttemptTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// 停止前 guest 刷盘的等待上限。
+    /// guest 内模块文件写入后若 QEMU 直接退出而页缓存未刷，文件会退化为 0 字节，
+    /// 因此停止必须先让 guest 执行一次 sync；但刷盘属尽力而为，超时或失败都不阻塞停止。
+    /// 刷盘只在该实例启动时已确认调试通路就绪时发起，未确认过的实例直接跳过。
+    /// </summary>
+    public static readonly TimeSpan DefaultShutdownFlushTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>停止前向 guest 下发的刷盘命令。</summary>
+    public const string ShutdownFlushCommand = "sync";
+
+    /// <summary>
+    /// 净桌面初始化的命令序列，按顺序下发以把刚启动的实例整理成可驱动的干净桌面。
+    /// 序列末尾另追加一次刷盘命令，让本步骤写入的安全设置落盘。
+    /// </summary>
+    public static readonly IReadOnlyList<string> CleanDesktopCommands =
+    [
+        // 解除锁屏对上层窗口合成的阻断：先持久化禁用系统锁屏，再解除当前 Keyguard 展示态。
+        // 锁屏存在时上层窗口的可见性判定恒为不可见，输入事件无法到达应用窗口。
+        "settings put secure lockscreen.disabled 1",
+        "locksettings set-disabled true",
+        "wm dismiss-keyguard",
+
+        // 收回顶部下滑手势的焦点占用：通知栏一旦展开会持续抢占输入焦点。
+        "cmd statusbar collapse",
+
+        // 关闭首启时系统弹出的桌面选择器叠层，避免其覆盖在标准桌面之上拦截后续操作。
+        "input keyevent 4",
+    ];
+
+    /// <summary>净桌面初始化序列执行完毕后用于让安全设置落盘的刷盘命令。</summary>
+    public const string CleanDesktopFlushCommand = "sync";
 
     private readonly IInstanceRepository _repository;
     private readonly IPortAllocator _portAllocator;
@@ -68,9 +101,12 @@ public sealed class InstanceManager
     private readonly TimeSpan _debugChannelProbeTimeout;
     private readonly TimeSpan _debugChannelProbeInterval;
     private readonly TimeSpan _debugChannelAttemptTimeout;
+    private readonly TimeSpan _shutdownFlushTimeout;
+    private readonly CleanDesktopOptions _cleanDesktopOptions;
 
     private readonly ConcurrentDictionary<string, InstanceState> _states = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, AllocatedPorts> _allocatedPorts = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, bool> _debugChannelReady = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, QemuProcessHandle> _handles = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, ProbingInputChannel> _inputChannels = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -109,6 +145,13 @@ public sealed class InstanceManager
     /// </param>
     /// <param name="debugChannelProbeInterval">调试通路就绪探测的重试间隔。</param>
     /// <param name="debugChannelAttemptTimeout">单次 adb 连接尝试的等待上限。</param>
+    /// <param name="shutdownFlushTimeout">
+    /// 停止前 guest 刷盘的等待上限。为 <see cref="TimeSpan.Zero"/> 时不刷盘，
+    /// 停止流程与该配置无关的调用点保持既有行为。
+    /// </param>
+    /// <param name="cleanDesktopOptions">
+    /// 净桌面初始化配置选项。为 null 时使用默认配置（默认启用，等待上限 5 秒）。
+    /// </param>
     public InstanceManager(
         IInstanceRepository repository,
         IPortAllocator portAllocator,
@@ -125,7 +168,9 @@ public sealed class InstanceManager
         IDensityAdvisor? densityAdvisor = null,
         TimeSpan? debugChannelProbeTimeout = null,
         TimeSpan? debugChannelProbeInterval = null,
-        TimeSpan? debugChannelAttemptTimeout = null)
+        TimeSpan? debugChannelAttemptTimeout = null,
+        TimeSpan? shutdownFlushTimeout = null,
+        CleanDesktopOptions? cleanDesktopOptions = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(portAllocator);
@@ -156,7 +201,17 @@ public sealed class InstanceManager
         _debugChannelAttemptTimeout = debugChannelAttemptTimeout > TimeSpan.Zero
             ? debugChannelAttemptTimeout.Value
             : DefaultDebugChannelAttemptTimeout;
+        // TimeSpan.Zero 是调用方显式关闭刷盘的显式取值，其余未配置时回落到默认上限。
+        _shutdownFlushTimeout = shutdownFlushTimeout == TimeSpan.Zero
+            ? TimeSpan.Zero
+            : shutdownFlushTimeout > TimeSpan.Zero
+                ? shutdownFlushTimeout.Value
+                : DefaultShutdownFlushTimeout;
+        _cleanDesktopOptions = cleanDesktopOptions ?? new CleanDesktopOptions();
     }
+
+    /// <summary>净桌面初始化配置选项。</summary>
+    public CleanDesktopOptions CleanDesktopOptions => _cleanDesktopOptions;
 
     /// <summary>指标采集器。</summary>
     public IMetricsRecorder MetricsRecorder => _metricsRecorder;
@@ -247,7 +302,9 @@ public sealed class InstanceManager
     }
 
     /// <summary>
-    /// 停止实例。先终止进程，再释放端口，最后置为已停止。
+    /// 停止实例。先让 guest 尽力刷盘，再终止进程，最后释放端口并置为已停止。
+    /// 刷盘只在该实例启动时已确认调试通路就绪时发起，且严格限时：
+    /// 未确认就绪、未连通或超时都只跳过，不影响停止结果；
     /// 端口释放在进程终止失败时同样执行，避免端口泄漏。
     /// </summary>
     /// <param name="instanceId">实例标识。</param>
@@ -388,7 +445,11 @@ public sealed class InstanceManager
                 .ConfigureAwait(false);
             if (unavailableReason is null)
             {
+                // 就绪结论既进指标，也作为停止前刷盘的准入依据：只有确认过 adbd 通的实例才值得再连一次。
+                _debugChannelReady[instanceId] = true;
                 _metricsRecorder.OnDebugChannelReady(instanceId);
+
+                await InitializeCleanDesktopAsync(allocated.Adb, cancellationToken).ConfigureAwait(false);
             }
             else
             {
@@ -461,6 +522,10 @@ public sealed class InstanceManager
 
             if (_handles.TryRemove(instanceId, out QemuProcessHandle? handle))
             {
+                // 刷盘必须排在 QMP quit 之前：QEMU 一旦退出，guest 就没有机会把页缓存写回磁盘，
+                // 刚写入的模块文件会退化为 0 字节。刷盘尽力而为，绝不影响后续的进程终止。
+                await FlushGuestFileSystemAsync(instanceId, cancellationToken).ConfigureAwait(false);
+
                 await handle.StopAsync(TimeSpan.FromSeconds(15), cancellationToken).ConfigureAwait(false);
                 await handle.DisposeAsync().ConfigureAwait(false);
             }
@@ -615,6 +680,122 @@ public sealed class InstanceManager
         }
     }
 
+    /// <summary>
+    /// 在实例退出前尽力让 guest 把页缓存刷到磁盘。guest 内刚写入的模块文件若未刷盘，
+    /// QEMU 直接退出后会成为 0 字节，因此停止流程必须先下发一次 sync。
+    /// 刷盘只在该实例启动时已确认调试通路就绪时才发起：没确认过 adbd 通的实例连上去也是徒劳，
+    /// 白等一个等待上限。该步骤同样严格限时，未配置刷盘、未确认就绪、adbd 掉线、
+    /// 命令失败或超时都只跳过，不向上抛也不改变实例状态——刷盘失败最多丢失最近一次写入，
+    /// 而停止失败会让实例无法回收，代价远大于刷盘收益。
+    /// </summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>表示刷盘尝试已结束的异步任务，完成不代表刷盘一定成功。</returns>
+    private async Task FlushGuestFileSystemAsync(string instanceId, CancellationToken cancellationToken)
+    {
+        if (_shutdownFlushTimeout <= TimeSpan.Zero
+            || !_debugChannelReady.TryGetValue(instanceId, out bool ready)
+            || !ready
+            || !_allocatedPorts.TryGetValue(instanceId, out AllocatedPorts? ports))
+        {
+            return;
+        }
+
+        try
+        {
+            // 连接与命令共用同一个限时令牌，guest 侧 sync 卡住也不会拖住停止流程。
+            using var flushSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            flushSource.CancelAfter(_shutdownFlushTimeout);
+
+            // 客户端按本次刷盘单独创建并随方法一并释放，不跨调用复用也不留下悬挂连接。
+            await using IAdbClient client = _adbClientFactory();
+            await client.ConnectAsync(ports.Adb, flushSource.Token, _shutdownFlushTimeout).ConfigureAwait(false);
+            await client.ShellAsync(ShutdownFlushCommand, flushSource.Token).ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            // 刷盘是尽力而为：任何失败都不阻塞停止，也不改变实例状态。
+        }
+    }
+
+    /// <summary>
+    /// 在调试通路确认就绪后把实例整理成干净可驱动的桌面。
+    /// 按序下发 <see cref="CleanDesktopCommands"/> 并以一次刷盘收尾，让本步骤写入的安全设置落盘。
+    /// 该步骤与停止前刷盘同理属尽力而为：整体严格限时，任何单条命令失败都只记录不外抛，
+    /// 既不阻断启动也不改变实例状态——桌面不干净最多影响后续交互观感，
+    /// 而启动失败会让实例直接不可用，代价远大于本步骤的收益。
+    /// </summary>
+    /// <param name="adbPort">该实例分配到的宿主 adb 端口。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>表示初始化尝试已结束的异步任务，完成不代表每条命令都执行成功。</returns>
+    private async Task InitializeCleanDesktopAsync(int adbPort, CancellationToken cancellationToken)
+    {
+        if (!_cleanDesktopOptions.Enabled || _cleanDesktopOptions.Timeout <= TimeSpan.Zero)
+        {
+            return;
+        }
+
+        try
+        {
+            // 连接与全部命令共用同一个限时令牌，guest 侧任一条命令卡住都不会拖住启动流程。
+            using var cleanSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cleanSource.CancelAfter(_cleanDesktopOptions.Timeout);
+            CancellationToken token = cleanSource.Token;
+
+            foreach (string command in CleanDesktopCommands)
+            {
+                if (token.IsCancellationRequested)
+                {
+                    return;
+                }
+
+                await RunCleanDesktopCommandAsync(adbPort, command, token, cancellationToken).ConfigureAwait(false);
+            }
+
+            if (!token.IsCancellationRequested)
+            {
+                await RunCleanDesktopCommandAsync(adbPort, CleanDesktopFlushCommand, token, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (Exception)
+        {
+            // 净桌面初始化是尽力而为：整体异常不阻断启动，也不改变实例状态。
+        }
+    }
+
+    /// <summary>
+    /// 下发单条净桌面 shell 命令。
+    /// adbd 在一条 shell 命令跑完后即关闭该连接，因此每条命令单独建立并释放一次连接，
+    /// 与宿主 adb 逐条执行命令的行为一致，也避免后续命令落在已被关闭的连接上。
+    /// </summary>
+    /// <param name="adbPort">该实例分配到的宿主 adb 端口。</param>
+    /// <param name="command">待下发的命令与参数。</param>
+    /// <param name="token">结合整体等待上限的执行令牌。</param>
+    /// <param name="callerToken">调用方的取消令牌，用于区分主动取消与等待上限到期。</param>
+    /// <returns>表示该条命令尝试已结束的异步任务。</returns>
+    private async Task RunCleanDesktopCommandAsync(
+        int adbPort,
+        string command,
+        CancellationToken token,
+        CancellationToken callerToken)
+    {
+        try
+        {
+            await using IAdbClient client = _adbClientFactory();
+            await client.ConnectAsync(adbPort, token, _cleanDesktopOptions.Timeout).ConfigureAwait(false);
+            await client.ShellAsync(command, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // 单条命令失败不阻断后续命令：命令之间彼此独立，缺一条只是少解决一个叠层问题。
+        }
+    }
+
     private async Task<string> EnsureOverlayAsync(
         string instanceId,
         string baseImagePath,
@@ -656,6 +837,8 @@ public sealed class InstanceManager
 
     private void ReleasePorts(string instanceId)
     {
+        _debugChannelReady.TryRemove(instanceId, out _);
+
         if (_allocatedPorts.TryRemove(instanceId, out _))
         {
             _portAllocator.Release(instanceId);

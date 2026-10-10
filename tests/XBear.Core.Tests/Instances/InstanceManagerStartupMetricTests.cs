@@ -80,7 +80,9 @@ public sealed class InstanceManagerStartupMetricTests : IDisposable
             densityAdvisor: null,
             debugChannelProbeTimeout: probeTimeout,
             debugChannelProbeInterval: probeInterval,
-            debugChannelAttemptTimeout: attemptTimeout);
+            debugChannelAttemptTimeout: attemptTimeout,
+            // 本套件只关心探测与冷启动耗时，关闭净桌面初始化以免其连接计入连接次数断言。
+            cleanDesktopOptions: new CleanDesktopOptions { Enabled = false });
 
     private InstanceStartupMetric StartupOf(string instanceId)
     {
