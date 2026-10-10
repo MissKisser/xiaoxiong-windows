@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text;
+using XBear.Core.Adb;
 using XBear.Core.Diagnostics;
 using XBear.Core.Modules;
 using XBear.Core.Tests.Adb;
@@ -36,7 +37,7 @@ public sealed class ModuleInstallerServiceTests : IDisposable
     /// <param name="server">假 adbd。</param>
     /// <returns>被测服务与目标实例的组合。</returns>
     private static (ModuleInstallerService Service, ModuleTarget Target) CreateService(FakeAdbdServer server) =>
-        (new ModuleInstallerService(), new ModuleTarget("inst-mod-01", server.Port));
+        (new ModuleInstallerService(() => new AdbClient(server.Port)), new ModuleTarget("inst-mod-01", 5555));
 
     /// <summary>
     /// 新建一个假 adbd，并把 shell 处理接到 guest 文件系统替身上。

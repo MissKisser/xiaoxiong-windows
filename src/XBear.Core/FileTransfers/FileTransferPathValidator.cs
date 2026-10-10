@@ -4,24 +4,24 @@ namespace XBear.Core.FileTransfers;
 
 /// <summary>
 /// 传输路径的边界与安全校验器。
-/// 实例侧限定用户可见域 /sdcard/ 前缀并防御路径穿越；
+/// 实例侧限定在实例自身文件系统内并防御上级目录回退越界；
 /// 宿主侧校验绝对路径、规范化并排查非法控制字符。
 /// </summary>
 public static class FileTransferPathValidator
 {
-    /// <summary>实例侧允许的用户存储域根前缀。</summary>
+    /// <summary>实例侧默认用户存储域根前缀，作界面便利默认值保留。</summary>
     public const string GuestAllowedPrefix = "/sdcard/";
 
-    /// <summary>实例侧允许的用户存储根路径（不带斜杠尾缀）。</summary>
+    /// <summary>实例侧默认用户存储根路径（不带斜杠尾缀），作界面便利默认值保留。</summary>
     public const string GuestAllowedRoot = "/sdcard";
 
     /// <summary>
-    /// 校验并归一化实例侧路径。路径必须落在 /sdcard/ 用户可见域内，
-    /// 并在消除 . 与 .. 段后确认未发生逃逸。
+    /// 校验并归一化实例侧路径。路径必须落在实例自身文件系统内，
+    /// 并在消除 . 与 .. 段后确认未发生上级目录段回退越界。
     /// </summary>
     /// <param name="remotePath">待校验的实例侧原始路径。</param>
     /// <returns>归一化后的实例侧绝对路径（正斜杠分隔）。</returns>
-    /// <exception cref="XBearException">路径为空、含控制字符或越出 /sdcard/ 域时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    /// <exception cref="XBearException">路径为空、含控制字符或越出实例文件系统时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
     public static string NormalizeAndValidateGuestPath(string? remotePath)
     {
         string raw = (remotePath ?? string.Empty).Trim();
@@ -30,7 +30,7 @@ public static class FileTransferPathValidator
             throw new XBearException(
                 ErrorCategory.Spec,
                 "实例侧路径不能为空。",
-                "请提供位于 /sdcard/ 域内的实例侧路径。");
+                "请提供实例自身文件系统内的绝对路径。");
         }
 
         AssertNoControlCharacters(raw, "实例侧");
@@ -41,20 +41,10 @@ public static class FileTransferPathValidator
             throw new XBearException(
                 ErrorCategory.Spec,
                 $"实例侧路径 {raw} 不是以正斜杠开头的绝对路径。",
-                "实例侧路径必须以 /sdcard/ 开头。");
+                "实例侧路径必须为以正斜杠开头的绝对路径。");
         }
 
-        string canonical = ResolveCanonicalUnixPath(normalizedSeparators);
-
-        if (!IsWithinGuestAllowedDomain(canonical))
-        {
-            throw new XBearException(
-                ErrorCategory.Spec,
-                $"实例侧路径 {raw} 超出允许的用户存储域 /sdcard/（归一化为 {canonical}）。",
-                "实例侧路径必须限定在 /sdcard/ 域内，不得使用上级目录段回退越界。");
-        }
-
-        return canonical;
+        return ResolveCanonicalUnixPath(normalizedSeparators, raw);
     }
 
     /// <summary>
@@ -106,12 +96,7 @@ public static class FileTransferPathValidator
         }
     }
 
-    private static bool IsWithinGuestAllowedDomain(string canonicalPath)
-    {
-        return canonicalPath == GuestAllowedRoot || canonicalPath.StartsWith(GuestAllowedPrefix, StringComparison.Ordinal);
-    }
-
-    private static string ResolveCanonicalUnixPath(string path)
+    private static string ResolveCanonicalUnixPath(string path, string raw)
     {
         var segments = new List<string>();
         foreach (string part in path.Split('/'))
@@ -123,11 +108,15 @@ public static class FileTransferPathValidator
 
             if (part == "..")
             {
-                if (segments.Count > 0)
+                if (segments.Count == 0)
                 {
-                    segments.RemoveAt(segments.Count - 1);
+                    throw new XBearException(
+                        ErrorCategory.Spec,
+                        $"实例侧路径 {raw} 包含越出实例根目录的上级目录段回退越界。",
+                        "实例侧路径必须落在实例自身文件系统内，不得使用上级目录段回退越界。");
                 }
 
+                segments.RemoveAt(segments.Count - 1);
                 continue;
             }
 

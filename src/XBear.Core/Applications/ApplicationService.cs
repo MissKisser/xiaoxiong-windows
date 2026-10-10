@@ -58,9 +58,6 @@ public sealed class ApplicationService
     /// <summary>包管理器失败时的输出标记。</summary>
     private const string FailureMarker = "Failure";
 
-    /// <summary>拉起成功时的输出标记，事件已注入即表示入口组件已被拉起到前台。</summary>
-    private const string LaunchSuccessMarker = "Events injected: 1";
-
     /// <summary>失败归因中原始输出片段的长度上限，与契约的消息字段上限一致。</summary>
     private const int MaxFailureMessageLength = 512;
 
@@ -375,7 +372,7 @@ public sealed class ApplicationService
             .ConfigureAwait(false);
         DateTimeOffset occurredAt = DateTimeOffset.Now;
         timer.Stop();
-        GuestOutcome outcome = InterpretLaunchOutput(execution.Output);
+        GuestOutcome outcome = InterpretLaunchOutput(execution.ExitCode, execution.Output);
 
         return BuildOperation(
             target,
@@ -526,20 +523,30 @@ public sealed class ApplicationService
     }
 
     /// <summary>
-    /// 判定拉起命令的输出。事件已注入表示入口组件被拉起到前台，
-    /// 其余输出一律判为失败：拉起是否成功必须以实例回报为准，不能凭命令跑完就报成功。
+    /// 判定拉起命令的输出。以退出码为准并结合已知失败标记反判，
+    /// 退出码为零且无已知失败标记判定为成功，避免依赖特定镜像 shell 包装器的成功文本标记。
     /// </summary>
+    /// <param name="exitCode">拉起命令退出码。</param>
     /// <param name="output">拉起命令的标准输出。</param>
     /// <returns>判定结论。</returns>
-    private static GuestOutcome InterpretLaunchOutput(string output)
+    private static GuestOutcome InterpretLaunchOutput(int exitCode, string output)
     {
         string trimmed = output.Trim();
-        if (trimmed.Contains(LaunchSuccessMarker, StringComparison.Ordinal))
+        if (exitCode != 0 || HasKnownLaunchFailureMarker(trimmed))
         {
-            return GuestOutcome.Success();
+            return GuestOutcome.Failed(ExtractFailureCode(trimmed), trimmed);
         }
 
-        return GuestOutcome.Failed(ExtractFailureCode(trimmed), trimmed);
+        return GuestOutcome.Success();
+    }
+
+    private static bool HasKnownLaunchFailureMarker(string output)
+    {
+        return output.Contains("monkey aborted", StringComparison.OrdinalIgnoreCase)
+            || output.Contains("No activities found", StringComparison.OrdinalIgnoreCase)
+            || output.Contains("** Error", StringComparison.OrdinalIgnoreCase)
+            || output.Contains("** Monkey aborted", StringComparison.OrdinalIgnoreCase)
+            || output.Contains("Failure [", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -570,6 +577,11 @@ public sealed class ApplicationService
         if (output.Contains("monkey aborted", StringComparison.OrdinalIgnoreCase))
         {
             return "LAUNCH_FAILED_ABORTED";
+        }
+
+        if (output.Contains("** Error", StringComparison.OrdinalIgnoreCase))
+        {
+            return "LAUNCH_FAILED_ERROR";
         }
 
         return UnclassifiedFailureCode;

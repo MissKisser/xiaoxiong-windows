@@ -44,6 +44,12 @@ public static class IconKeys
     /// <summary>文件传输的图标键。</summary>
     public const string FileTransfer = "Icon.FileTransfer";
 
+    /// <summary>应用的图标键。</summary>
+    public const string Application = "Icon.Application";
+
+    /// <summary>模块的图标键。</summary>
+    public const string Module = "Icon.Module";
+
     /// <summary>保真度的图标键。</summary>
     public const string Fidelity = "Icon.Fidelity";
 
@@ -76,6 +82,7 @@ public static class IconKeys
         Instance, Image, Start, Stop, Delete,
         Snapshot, Restore, MultiInstance,
         Projection, InputChannel, FileTransfer,
+        Application, Module,
         Fidelity, DeviceIdentity, Diagnostics, Exposure, ErrorEnvironment,
         StateRunning, StateStopped, StateFailed
     ];

@@ -85,8 +85,8 @@ public sealed class SyncGoldenVectorTests : IDisposable
         byte[] content = Encoding.UTF8.GetBytes("golden");
         string localPath = CreateTempFile(content);
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/a.txt");
 
@@ -110,8 +110,8 @@ public sealed class SyncGoldenVectorTests : IDisposable
         byte[] content = [0x00, 0x01, 0x02, 0xFD, 0xFE, 0xFF];
         string localPath = CreateTempFile(content);
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/a.bin");
 
@@ -127,8 +127,8 @@ public sealed class SyncGoldenVectorTests : IDisposable
     {
         string localPath = CreateTempFile(Encoding.UTF8.GetBytes("x"));
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/a.txt");
 
@@ -147,8 +147,8 @@ public sealed class SyncGoldenVectorTests : IDisposable
         string localPath = CreateTempFile(content);
 
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/big.bin");
 
@@ -173,8 +173,8 @@ public sealed class SyncGoldenVectorTests : IDisposable
     {
         string localPath = CreateTempFile(new byte[MaxChunk + 5]);
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/x.bin");
 
@@ -187,8 +187,8 @@ public sealed class SyncGoldenVectorTests : IDisposable
         byte[] content = Encoding.UTF8.GetBytes("pulled");
         await using var server = new FakeAdbdServer();
         server.SetFile("/data/local/tmp/b.txt", content);
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
         string localPath = ReserveTempPath();
 
         await client.PullAsync("/data/local/tmp/b.txt", localPath);
@@ -211,8 +211,8 @@ public sealed class SyncGoldenVectorTests : IDisposable
 
         string localPath = CreateTempFile(content);
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/rt.bin");
 
@@ -227,8 +227,8 @@ public sealed class SyncGoldenVectorTests : IDisposable
     {
         string localPath = CreateTempFile(Encoding.UTF8.GetBytes("m"));
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/m.txt");
 

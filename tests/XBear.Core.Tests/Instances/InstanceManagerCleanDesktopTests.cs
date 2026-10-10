@@ -83,7 +83,7 @@ public sealed class InstanceManagerCleanDesktopTests : IDisposable
             specValidator: null,
             imageCatalog: null,
             qmpClientFactory: null,
-            adbClientFactory: adbClientFactory ?? (() => new AdbClient()),
+            adbClientFactory: adbClientFactory ?? (() => new AdbClient(adbPort)),
             metricsRecorder: null,
             densityAdvisor: null,
             debugChannelProbeTimeout: probeTimeout ?? TimeSpan.FromMilliseconds(500),

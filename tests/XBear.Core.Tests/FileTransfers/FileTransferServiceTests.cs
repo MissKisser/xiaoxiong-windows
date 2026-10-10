@@ -42,8 +42,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task 双向传输_HostToInstance_传输完成且字节一致()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         byte[] payload = Encoding.UTF8.GetBytes("host to instance test content 1234567890");
         string localSource = CreateLocalFile("source.bin", payload);
@@ -74,8 +74,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task 双向传输_InstanceToHost_传输完成且字节一致()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         byte[] payload = Encoding.UTF8.GetBytes("instance to host test content 9876543210");
         const string remoteSource = "/sdcard/Download/guest_source.bin";
@@ -115,8 +115,8 @@ public sealed class FileTransferServiceTests : IDisposable
             return new ShellResponse(string.Empty, 0);
         };
 
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         string localSource = CreateLocalFile("sync_test.txt", "flush test content");
         const string remoteTarget = "/sdcard/Download/sync_test.txt";
@@ -136,8 +136,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task 冲突策略_HostToInstance_目标存在且overwrite为false时被拒()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         const string remoteTarget = "/sdcard/Download/existing.txt";
         server.SetFile(remoteTarget, Encoding.UTF8.GetBytes("old content"));
@@ -168,8 +168,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task 冲突策略_HostToInstance_目标存在且overwrite为true时覆盖成功()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         const string remoteTarget = "/sdcard/Download/overwrite_me.txt";
         server.SetFile(remoteTarget, Encoding.UTF8.GetBytes("old data"));
@@ -191,8 +191,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task 冲突策略_InstanceToHost_目标存在且overwrite为false时被拒()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         const string remoteSource = "/sdcard/Download/remote.txt";
         server.SetFile(remoteSource, Encoding.UTF8.GetBytes("remote data"));
@@ -220,8 +220,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task 冲突策略_InstanceToHost_目标存在且overwrite为true时覆盖成功()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         const string remoteSource = "/sdcard/Download/source.txt";
         server.SetFile(remoteSource, Encoding.UTF8.GetBytes("pulled new data"));
@@ -243,8 +243,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task 取消传输_中途取消进入Cancelled终态且清理半成品()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         // 创建大文件触发分块流式传输
         var bigPayload = new byte[256 * 1024];
@@ -287,8 +287,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task 进度上报_字节数单调不减()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         var payload = new byte[180 * 1024];
         new Random(123).NextBytes(payload);
@@ -324,8 +324,8 @@ public sealed class FileTransferServiceTests : IDisposable
     public async Task totalBytes语义_Host源可知_Guest源取不到时为null()
     {
         await using var server = new FakeAdbdServer();
-        var service = new FileTransferService(() => new AdbClient());
-        var target = new FileTransferTarget("win-main-01", server.Port);
+        var service = new FileTransferService(() => new AdbClient(server.Port));
+        var target = new FileTransferTarget("win-main-01", 5555);
 
         // 1. Host-to-Instance: 源尺寸天然可知
         string localFile = CreateLocalFile("known_size.txt", "12345");
@@ -357,12 +357,12 @@ public sealed class FileTransferServiceTests : IDisposable
     }
 
     [Theory]
-    [InlineData("/sdcard/../data/local/tmp/hack.txt")]
-    [InlineData("/data/local/tmp/outside.txt")]
     [InlineData("/sdcard/../../etc/passwd")]
+    [InlineData("/../etc/passwd")]
+    [InlineData("/a/b/../../../etc/passwd")]
     [InlineData("sdcard/no_root_slash.txt")]
     [InlineData("")]
-    public void 路径域校验_Guest侧逃逸sdcard被拒(string invalidGuestPath)
+    public void 路径域校验_Guest侧回退越界被拒(string invalidGuestPath)
     {
         XBearException ex = Assert.Throws<XBearException>(() =>
             FileTransferPathValidator.NormalizeAndValidateGuestPath(invalidGuestPath));
@@ -370,11 +370,14 @@ public sealed class FileTransferServiceTests : IDisposable
         Assert.Equal(ErrorCategory.Spec, ex.Category);
     }
 
-    [Fact]
-    public void 路径域校验_Guest侧允许有效子目录与上级抵消()
+    [Theory]
+    [InlineData("/sdcard/a/b/../c/file.txt", "/sdcard/a/c/file.txt")]
+    [InlineData("/data/local/tmp/outside.txt", "/data/local/tmp/outside.txt")]
+    [InlineData("/system/bin/sh", "/system/bin/sh")]
+    public void 路径域校验_Guest侧允许系统与用户目录规范绝对路径(string guestPath, string expected)
     {
-        string normalized = FileTransferPathValidator.NormalizeAndValidateGuestPath("/sdcard/a/b/../c/file.txt");
-        Assert.Equal("/sdcard/a/c/file.txt", normalized);
+        string normalized = FileTransferPathValidator.NormalizeAndValidateGuestPath(guestPath);
+        Assert.Equal(expected, normalized);
     }
 
     [Theory]

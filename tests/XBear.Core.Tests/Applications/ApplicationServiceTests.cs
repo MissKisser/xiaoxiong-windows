@@ -2,6 +2,7 @@ using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using XBear.Core.Adb;
 using XBear.Core.Applications;
 using XBear.Core.Diagnostics;
 using XBear.Core.Spec;
@@ -44,7 +45,7 @@ public sealed class ApplicationServiceTests : IDisposable
     private static (ApplicationService Service, ApplicationTarget Target) CreateService(
         FakeAdbdServer server,
         string instanceId = DefaultInstanceId) =>
-        (new ApplicationService(), new ApplicationTarget(instanceId, server.Port));
+        (new ApplicationService(() => new AdbClient(server.Port)), new ApplicationTarget(instanceId, 5555));
 
     /// <summary>
     /// 在宿主临时目录中构造一个带有合法 ZIP 头魔数的假 APK 应用包。
@@ -488,6 +489,33 @@ public sealed class ApplicationServiceTests : IDisposable
         };
         string json = JsonSerializer.Serialize(appSpec, SpecLoader.SerializerOptions);
         Assert.True(SpecTestHost.Validator.ValidateApplication(json).IsValid);
+    }
+
+    [Fact]
+    public async Task 拉起_成功路径_BlissOS脚本包装器输出无EventsInjected标记同样判定成功()
+    {
+        await using var server = new FakeAdbdServer();
+        server.ShellHandler = command =>
+        {
+            if (command == string.Format(ApplicationService.LaunchCommandFormat, DefaultPackageName))
+            {
+                return new ShellResponse(
+                    "bash arg: -p\nbash arg: com.example.handyplayer\nbash arg: -c\nbash arg: android.intent.category.LAUNCHER\nbash arg: 1\n",
+                    0);
+            }
+
+            return new ShellResponse(string.Empty, 0);
+        };
+
+        (ApplicationService service, ApplicationTarget target) = CreateService(server);
+
+        ApplicationOperation op = await service.LaunchAsync(target, DefaultPackageName);
+
+        Assert.True(op.IsSuccess());
+        Assert.Equal(ApplicationOperationKind.Launch, op.Operation);
+        Assert.Equal(DefaultPackageName, op.PackageName);
+        Assert.Equal(ApplicationOperationResult.Success, op.Result);
+        Assert.Null(op.FailureReason);
     }
 
     [Fact]

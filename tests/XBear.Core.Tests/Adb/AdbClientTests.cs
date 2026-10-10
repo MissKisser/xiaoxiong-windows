@@ -11,28 +11,26 @@ public sealed class AdbClientTests : IDisposable
     private readonly List<string> _temporaryFiles = [];
 
     [Fact]
-    public async Task ConnectAsync_请求帧使用四字节小端长度前缀且解析出版本()
+    public async Task ConnectAsync_请求帧使用十六进制ASCII长度前缀且解析出版本()
     {
         await using var server = new FakeAdbdServer { ProtocolVersion = 0x29 };
-        await using var client = new AdbClient();
+        await using var client = new AdbClient(server.Port);
 
-        int version = await client.ConnectAsync(server.Port);
+        int version = await client.ConnectAsync(5555);
 
         Assert.Equal(0x29, version);
         byte[] frame = server.RawRequests[0];
-        int declared = BinaryPrimitives.ReadInt32LittleEndian(frame.AsSpan(0, 4));
-        Assert.Equal(frame.Length - 4, declared);
-        Assert.Equal(16, declared);
-        Assert.Equal("0010host:version", Encoding.ASCII.GetString(frame, 4, frame.Length - 4));
+        Assert.Equal(16, frame.Length);
+        Assert.Equal("000chost:version", Encoding.ASCII.GetString(frame));
     }
 
     [Fact]
     public async Task ConnectAsync_紧凑回包同样能解析出版本()
     {
         await using var server = new FakeAdbdServer { ProtocolVersion = 0x29, PadVersionResponse = false };
-        await using var client = new AdbClient();
+        await using var client = new AdbClient(server.Port);
 
-        Assert.Equal(0x29, await client.ConnectAsync(server.Port));
+        Assert.Equal(0x29, await client.ConnectAsync(5555));
     }
 
     [Fact]
@@ -43,8 +41,8 @@ public sealed class AdbClientTests : IDisposable
         int port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
         probe.Stop();
 
-        await using var client = new AdbClient();
-        XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ConnectAsync(port));
+        await using var client = new AdbClient(port);
+        XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ConnectAsync(5555));
 
         Assert.Equal(ErrorCategory.Protocol, error.Category);
     }
@@ -57,8 +55,8 @@ public sealed class AdbClientTests : IDisposable
             ShellHandler = command => new ShellResponse($"[{command}] hello\n", 0),
         };
 
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         Assert.Equal("[echo hi] hello\n", await client.ShellAsync("echo hi"));
         Assert.Contains(server.Requests, request => request.StartsWith("shell:echo hi", StringComparison.Ordinal));
@@ -72,8 +70,8 @@ public sealed class AdbClientTests : IDisposable
             ShellHandler = _ => new ShellResponse("No such file or directory\n", 127),
         };
 
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ShellAsync("ls /nope"));
 
@@ -92,8 +90,8 @@ public sealed class AdbClientTests : IDisposable
             ShellHandler = _ => new ShellResponse(output, 0),
         };
 
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         Assert.Equal(expected, await client.IsRootAsync());
     }
@@ -103,8 +101,8 @@ public sealed class AdbClientTests : IDisposable
     {
         string localPath = CreateTempFile("hello adb\0binary\n");
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/hello.txt");
 
@@ -119,8 +117,8 @@ public sealed class AdbClientTests : IDisposable
         await using var server = new FakeAdbdServer();
         server.SetFile("/data/local/tmp/a.txt", content);
 
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
         string localPath = ReserveTempPath();
         _temporaryFiles.Add(localPath);
 
@@ -136,8 +134,8 @@ public sealed class AdbClientTests : IDisposable
         await using var server = new FakeAdbdServer();
         server.SetFile("/sdcard/Download/test.txt", content);
 
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         var info = await client.StatAsync("/sdcard/Download/test.txt");
 
@@ -150,8 +148,8 @@ public sealed class AdbClientTests : IDisposable
     public async Task StatAsync_不存在的文件返回空()
     {
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         var info = await client.StatAsync("/sdcard/Download/missing.bin");
 
@@ -172,8 +170,8 @@ public sealed class AdbClientTests : IDisposable
         string localPath = CreateTempFile(content);
 
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         await client.PushAsync(localPath, "/data/local/tmp/big.bin");
 
@@ -188,8 +186,8 @@ public sealed class AdbClientTests : IDisposable
     public async Task PullAsync_远端文件不存在时抛协议错误()
     {
         await using var server = new FakeAdbdServer();
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
         string localPath = ReserveTempPath();
         _temporaryFiles.Add(localPath);
 
@@ -204,8 +202,8 @@ public sealed class AdbClientTests : IDisposable
     public async Task ShellAsync_取消令牌可中断阻塞读取()
     {
         await using var server = new FakeAdbdServer { StallShell = true };
-        await using var client = new AdbClient();
-        await client.ConnectAsync(server.Port);
+        await using var client = new AdbClient(server.Port);
+        await client.ConnectAsync(5555);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(300));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.ShellAsync("sleep 100", cts.Token));
@@ -219,11 +217,11 @@ public sealed class AdbClientTests : IDisposable
     public async Task ConnectAsync_握手无响应时按等待上限抛超时而不是挂死()
     {
         await using var server = new FakeAdbdServer { StallHandshake = true };
-        await using var client = new AdbClient();
+        await using var client = new AdbClient(server.Port);
 
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         XBearException error = await Assert.ThrowsAsync<XBearException>(() =>
-            client.ConnectAsync(server.Port, timeout: TimeSpan.FromMilliseconds(300)));
+            client.ConnectAsync(5555, timeout: TimeSpan.FromMilliseconds(300)));
         stopwatch.Stop();
 
         Assert.Equal(ErrorCategory.Timeout, error.Category);
@@ -239,9 +237,9 @@ public sealed class AdbClientTests : IDisposable
     public async Task ConnectAsync_客户端级等待上限同样生效()
     {
         await using var server = new FakeAdbdServer { StallHandshake = true };
-        await using var client = new AdbClient(TimeSpan.FromMilliseconds(300));
+        await using var client = new AdbClient(server.Port, TimeSpan.FromMilliseconds(300));
 
-        XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ConnectAsync(server.Port));
+        XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ConnectAsync(5555));
 
         Assert.Equal(ErrorCategory.Timeout, error.Category);
     }
@@ -259,11 +257,11 @@ public sealed class AdbClientTests : IDisposable
     public async Task ConnectAsync_调用方取消保持取消语义()
     {
         await using var server = new FakeAdbdServer { StallHandshake = true };
-        await using var client = new AdbClient();
+        await using var client = new AdbClient(server.Port);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            client.ConnectAsync(server.Port, cts.Token, TimeSpan.FromSeconds(30)));
+            client.ConnectAsync(5555, cts.Token, TimeSpan.FromSeconds(30)));
     }
 
     /// <summary>连接被拒是协议层失败而非超时，两类结论不得混淆。</summary>
@@ -275,8 +273,8 @@ public sealed class AdbClientTests : IDisposable
         int port = ((System.Net.IPEndPoint)probe.LocalEndpoint).Port;
         probe.Stop();
 
-        await using var client = new AdbClient();
-        XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ConnectAsync(port));
+        await using var client = new AdbClient(port);
+        XBearException error = await Assert.ThrowsAsync<XBearException>(() => client.ConnectAsync(5555));
 
         Assert.Equal(ErrorCategory.Protocol, error.Category);
     }
@@ -286,9 +284,9 @@ public sealed class AdbClientTests : IDisposable
     public async Task ConnectAsync_握手阶段连接被关闭按协议错误上报()
     {
         await using var server = new FakeAdbdServer { StallHandshake = true };
-        await using var client = new AdbClient();
+        await using var client = new AdbClient(server.Port);
 
-        Task<int> connect = client.ConnectAsync(server.Port, timeout: TimeSpan.FromSeconds(10));
+        Task<int> connect = client.ConnectAsync(5555, timeout: TimeSpan.FromSeconds(10));
         await Task.Delay(200);
         await server.DisposeAsync();
 
@@ -299,33 +297,31 @@ public sealed class AdbClientTests : IDisposable
 
     public void Dispose()
     {
-        foreach (string path in _temporaryFiles)
+        foreach (string file in _temporaryFiles)
         {
-            if (File.Exists(path))
+            if (File.Exists(file))
             {
-                File.Delete(path);
+                try
+                {
+                    File.Delete(file);
+                }
+                catch
+                {
+                }
             }
         }
     }
 
-    private string ReserveTempPath()
-    {
-        string path = Path.Combine(Path.GetTempPath(), $"xbear-adb-{Guid.NewGuid():N}.bin");
-        _temporaryFiles.Add(path);
-        return path;
-    }
-
-    private string CreateTempFile(string content)
-    {
-        string path = ReserveTempPath();
-        File.WriteAllText(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
-        return path;
-    }
+    private string CreateTempFile(string content) => CreateTempFile(Encoding.UTF8.GetBytes(content));
 
     private string CreateTempFile(byte[] content)
     {
         string path = ReserveTempPath();
         File.WriteAllBytes(path, content);
+        _temporaryFiles.Add(path);
         return path;
     }
+
+    private static string ReserveTempPath() =>
+        Path.Combine(Path.GetTempPath(), "xbear-adb-test-" + Guid.NewGuid().ToString("N"));
 }

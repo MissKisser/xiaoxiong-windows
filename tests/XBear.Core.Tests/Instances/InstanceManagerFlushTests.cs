@@ -103,7 +103,7 @@ public sealed class InstanceManagerFlushTests : IDisposable
             specValidator: null,
             imageCatalog: null,
             qmpClientFactory: null,
-            adbClientFactory: () => new AdbClient(),
+            adbClientFactory: () => new AdbClient(adbPort),
             metricsRecorder: null,
             densityAdvisor: null,
             debugChannelProbeTimeout: probeTimeout ?? TimeSpan.FromMilliseconds(500),

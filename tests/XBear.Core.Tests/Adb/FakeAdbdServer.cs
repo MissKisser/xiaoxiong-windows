@@ -1,8 +1,10 @@
-﻿using System.Buffers.Binary;
+using System.Buffers.Binary;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using XBear.Core.Abstractions;
+using XBear.Core.Adb;
 
 namespace XBear.Core.Tests.Adb;
 
@@ -12,8 +14,7 @@ namespace XBear.Core.Tests.Adb;
 internal sealed record ShellResponse(string Output, int ExitCode);
 
 /// <summary>
-/// 内存内的假 adbd：按真实 adbd 的字节流规则处理 host 服务、shell 与 sync 子协议，
-/// 用于在不依赖真实 Android 实例的前提下验证客户端。
+/// 内存内的假 adb server：按真实 adb 服务的 Smart Socket 协议规则处理 host 服务、shell 与 sync 子协议。
 /// </summary>
 internal sealed class FakeAdbdServer : IAsyncDisposable
 {
@@ -59,8 +60,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
 
     /// <summary>
     /// 是否接受连接后故意不回应握手。
-    /// 宿主转发会在宿主侧立即接受连接，adbd 未就绪时正是这种表现，
-    /// 用于验证客户端不会在握手上永久阻塞。
     /// </summary>
     public bool StallHandshake { get; set; }
 
@@ -68,7 +67,16 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
     public bool DisableStat { get; set; }
 
     /// <summary>客户端发出的请求负载原文。</summary>
-    public IReadOnlyList<string> Requests => _requests;
+    public IReadOnlyList<string> Requests
+    {
+        get
+        {
+            lock (_requests)
+            {
+                return _requests.ToArray();
+            }
+        }
+    }
 
     /// <summary>服务端收到的 shell 命令行，已剥除退出码标记，按接收顺序排列。</summary>
     public IReadOnlyList<string> ShellCommands
@@ -82,14 +90,41 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
         }
     }
 
-    /// <summary>客户端发出的请求原始帧，含 4 字节小端长度前缀。</summary>
-    public IReadOnlyList<byte[]> RawRequests => _rawRequests;
+    /// <summary>客户端发出的请求原始帧，含 4 字符十六进制长度前缀。</summary>
+    public IReadOnlyList<byte[]> RawRequests
+    {
+        get
+        {
+            lock (_rawRequests)
+            {
+                return _rawRequests.ToArray();
+            }
+        }
+    }
 
     /// <summary>客户端在 sync 模式中发出的原始帧，含 8 字节头与负载。</summary>
-    public IReadOnlyList<byte[]> RawSyncFrames => _rawSyncFrames;
+    public IReadOnlyList<byte[]> RawSyncFrames
+    {
+        get
+        {
+            lock (_rawSyncFrames)
+            {
+                return _rawSyncFrames.ToArray();
+            }
+        }
+    }
 
     /// <summary>客户端在 sync 模式中发出的命令字，顺序与线上字节一致。</summary>
-    public IReadOnlyList<string> SyncCommands => _syncCommands;
+    public IReadOnlyList<string> SyncCommands
+    {
+        get
+        {
+            lock (_syncCommands)
+            {
+                return _syncCommands.ToArray();
+            }
+        }
+    }
 
     /// <summary>按命令字筛出 sync 模式中发出的原始帧。</summary>
     /// <param name="command">命令字，例如 SEND、DATA、DONE。</param>
@@ -171,6 +206,12 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
         }
     }
 
+    /// <summary>创建直连当前假服务端的 adb 客户端。</summary>
+    /// <param name="timeout">可选超时。</param>
+    /// <returns>adb 客户端。</returns>
+    public IAdbFileTransferClient CreateClient(TimeSpan? timeout = null) =>
+        new AdbClient(timeout, Port);
+
     /// <summary>关闭监听与全部已建立的连接，释放后台任务。</summary>
     /// <returns>表示释放完成的异步结果。</returns>
     public async ValueTask DisposeAsync()
@@ -178,7 +219,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
         _cts.Cancel();
         _listener.Stop();
 
-        // 先关闭所有已接受的连接，解除服务端线程在读阻塞上的等待。
         TcpClient[] clients;
         lock (_connections)
         {
@@ -197,7 +237,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
         }
         catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException)
         {
-            // 监听结束属正常路径。
         }
     }
 
@@ -249,7 +288,7 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                         return;
                     }
 
-                    string payload = Encoding.UTF8.GetString(frame, 8, frame.Length - 8);
+                    string payload = Encoding.UTF8.GetString(frame, 4, frame.Length - 4);
                     lock (_rawRequests)
                     {
                         _rawRequests.Add(frame);
@@ -265,7 +304,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
             }
             catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException or IOException)
             {
-                // 连接结束属正常路径。
             }
         }
     }
@@ -282,11 +320,25 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
 
             await WriteStatusAsync(stream, "OKAY").ConfigureAwait(false);
             await WriteVersionAsync(stream).ConfigureAwait(false);
-            return true;
+            return false;
+        }
+
+        if (payload.StartsWith("host:connect:", StringComparison.Ordinal))
+        {
+            string targetAddr = payload["host:connect:".Length..];
+            await WriteStatusAsync(stream, "OKAY").ConfigureAwait(false);
+            await WriteLengthPrefixedAsync(stream, Encoding.UTF8.GetBytes($"connected to {targetAddr}")).ConfigureAwait(false);
+            return false;
         }
 
         if (payload.StartsWith("host:transport", StringComparison.Ordinal))
         {
+            if (StallHandshake)
+            {
+                await Task.Delay(Timeout.Infinite, _cts.Token).ConfigureAwait(false);
+                return false;
+            }
+
             await WriteStatusAsync(stream, "OKAY").ConfigureAwait(false);
             return true;
         }
@@ -304,7 +356,7 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
 
         await WriteStatusAsync(stream, "FAIL").ConfigureAwait(false);
         await WriteLengthPrefixedAsync(stream, Encoding.UTF8.GetBytes("unknown host service")).ConfigureAwait(false);
-        return true;
+        return false;
     }
 
     private async Task<bool> HandleShellAsync(NetworkStream stream, string commandLine)
@@ -335,7 +387,11 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
         ShellResponse? response = ShellHandler?.Invoke(command);
         if (response is null)
         {
-            if (command.StartsWith("test -e ", StringComparison.Ordinal) || command.StartsWith("test -f ", StringComparison.Ordinal))
+            if (command == "id -u")
+            {
+                response = new ShellResponse("0\n", 0);
+            }
+            else if (command.StartsWith("test -e ", StringComparison.Ordinal) || command.StartsWith("test -f ", StringComparison.Ordinal))
             {
                 string targetPath = command[8..].Trim().Trim('"');
                 lock (_files)
@@ -349,6 +405,7 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                 response = new ShellResponse(string.Empty, 0);
             }
         }
+
         byte[] output = Encoding.UTF8.GetBytes(response.Output + ExitMarker + response.ExitCode + "\n");
         await stream.WriteAsync(output, _cts.Token).ConfigureAwait(false);
         await stream.FlushAsync(_cts.Token).ConfigureAwait(false);
@@ -363,15 +420,27 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
 
         while (!_cts.IsCancellationRequested)
         {
-            // sync 请求固定为 8 字节头：4 字节 ASCII 命令字在前，4 字节小端长度在后。
             byte[] idBytes = await ReadExactAsync(stream, 4).ConfigureAwait(false);
             byte[] lenBytes = await ReadExactAsync(stream, 4).ConfigureAwait(false);
             uint rawLength = BinaryPrimitives.ReadUInt32LittleEndian(lenBytes);
             string command = Encoding.ASCII.GetString(idBytes);
 
+            if (command == "QUIT")
+            {
+                lock (_rawSyncFrames)
+                {
+                    var quitFrame = new byte[8];
+                    idBytes.CopyTo(quitFrame, 0);
+                    lenBytes.CopyTo(quitFrame, 4);
+                    _rawSyncFrames.Add(quitFrame);
+                    _syncCommands.Add(command);
+                }
+
+                return false;
+            }
+
             if (command == "DONE")
             {
-                // DONE 的长度字段是文件的最后修改时间，不是负载长度，其后没有负载字节。
                 lock (_rawSyncFrames)
                 {
                     var doneFrame = new byte[8];
@@ -382,7 +451,7 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                 }
 
                 await CompleteSendAsync(stream, rawLength, pendingPath, pendingMode, staging).ConfigureAwait(false);
-                return true;
+                continue;
             }
 
             if (rawLength > MaxSyncPayload)
@@ -405,7 +474,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
             {
                 case "SEND":
                 {
-                    // 路径与权限位拼在同一个负载里，用最后一个逗号分隔，权限位为十进制 ASCII。
                     string combined = Encoding.UTF8.GetString(payload);
                     int comma = combined.LastIndexOf(',');
                     if (comma < 0)
@@ -423,9 +491,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                         ? mode
                         : 0;
                     staging.SetLength(0);
-
-                    // 受理 SEND 后回一个 OKAY，其长度可忽略。
-                    await SendSyncOkayAsync(stream).ConfigureAwait(false);
                     break;
                 }
 
@@ -435,7 +500,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                         throw new IOException($"DATA 分块 {rawLength} 超过 64KB 上限。");
                     }
 
-                    // DATA 块服务端不返回任何应答。
                     staging.Write(payload, 0, payload.Length);
                     break;
 
@@ -459,12 +523,11 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                             _mtimes.TryGetValue(statPath, out mtime);
                             if (mode == 0)
                             {
-                                mode = 0x81A4; // S_IFREG | 0644
+                                mode = 0x81A4;
                             }
                         }
                     }
 
-                    // STAT 回包为 16 字节：「STAT」+ mode(4) + size(4) + mtime(4)。文件不存在时各数值为 0。
                     var response = new byte[16];
                     Encoding.ASCII.GetBytes("STAT").CopyTo(response, 0);
                     BinaryPrimitives.WriteUInt32LittleEndian(response.AsSpan(4, 4), mode);
@@ -489,12 +552,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                         return false;
                     }
 
-                    // 受理回包为「OKAY + 总长度」，随后是若干 DATA 分块，最后以 DONE 收尾。
-                    var preamble = new byte[8];
-                    Encoding.ASCII.GetBytes("OKAY").CopyTo(preamble, 0);
-                    BinaryPrimitives.WriteUInt32LittleEndian(preamble.AsSpan(4, 4), (uint)content.Length);
-                    await stream.WriteAsync(preamble, _cts.Token).ConfigureAwait(false);
-
                     for (int offset = 0; offset < content.Length; offset += ChunkSize)
                     {
                         int count = Math.Min(ChunkSize, content.Length - offset);
@@ -510,7 +567,7 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
                     Encoding.ASCII.GetBytes("DONE").CopyTo(done, 0);
                     BinaryPrimitives.WriteUInt32LittleEndian(done.AsSpan(4, 4), 0);
                     await WriteAndFlushAsync(stream, done).ConfigureAwait(false);
-                    return true;
+                    break;
                 }
 
                 default:
@@ -522,13 +579,6 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
         return false;
     }
 
-    /// <summary>收尾一次 SEND 传输，落盘暂存内容并回复 OKAY。</summary>
-    /// <param name="stream">连接流。</param>
-    /// <param name="mtime">DONE 帧长度字段携带的最后修改时间。</param>
-    /// <param name="pendingPath">SEND 帧声明的目标路径，未发送 SEND 时为 null。</param>
-    /// <param name="mode">SEND 帧中解析出的权限位。</param>
-    /// <param name="staging">累积的文件内容。</param>
-    /// <returns>表示回复已发出的异步结果。</returns>
     private async Task CompleteSendAsync(
         NetworkStream stream,
         uint mtime,
@@ -574,13 +624,8 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
 
     private async Task WriteVersionAsync(NetworkStream stream)
     {
-        var payload = new byte[PadVersionResponse ? 0x29 : 12];
-
-        // 真实 adbd 形如「十六进制长度 + 内层十六进制长度 + 4 字节版本号」。
-        string inner = PadVersionResponse ? "0029" : payload.Length.ToString("x4");
-        Encoding.ASCII.GetBytes(inner).CopyTo(payload, 0);
-        Encoding.ASCII.GetBytes("0029").CopyTo(payload, 4);
-        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(8, 4), ProtocolVersion);
+        string verStr = ProtocolVersion.ToString("x4");
+        byte[] payload = Encoding.ASCII.GetBytes(verStr);
         await WriteLengthPrefixedAsync(stream, payload).ConfigureAwait(false);
     }
 
@@ -602,8 +647,8 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
     private async Task<byte[]?> ReadFrameAsync(Stream stream)
     {
         byte[] header = await ReadExactAsync(stream, 4).ConfigureAwait(false);
-        int length = BinaryPrimitives.ReadInt32LittleEndian(header);
-        if (length < 4 || length > 0xFFFF)
+        string lenHex = Encoding.ASCII.GetString(header);
+        if (!int.TryParse(lenHex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out int length) || length < 0 || length > 0xFFFF)
         {
             return null;
         }
@@ -624,7 +669,7 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
             int read = await stream.ReadAsync(buffer.AsMemory(offset, count - offset), _cts.Token).ConfigureAwait(false);
             if (read == 0)
             {
-                throw new IOException("对端关闭了连接。");
+                throw new IOException("连接提前关闭。");
             }
 
             offset += read;

@@ -1,0 +1,220 @@
+<Window x:Class="XBear.App.Views.FileTransferWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding WindowTitle}"
+        Height="760" Width="980"
+        WindowStartupLocation="CenterOwner"
+        Background="{DynamicResource Token.Color.Surface.Base}">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- 顶部信息栏：展示传输图标与当前实例信息 -->
+        <Border Grid.Row="0"
+                Style="{DynamicResource Card}"
+                Margin="{DynamicResource Token.Space.Md}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Image Grid.Column="0"
+                       Source="{StaticResource Icon.FileTransfer}"
+                       Style="{StaticResource SectionHeaderIcon}"
+                       ToolTip="文件传输" />
+
+                <TextBlock Grid.Column="1"
+                           Text="{Binding WindowTitle}"
+                           FontWeight="{DynamicResource Token.Weight.Medium}"
+                           VerticalAlignment="Center"
+                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+            </Grid>
+        </Border>
+
+        <!-- 传输配置区：方向选择、宿主文件选择、实例路径输入、冲突策略与发起按钮 -->
+        <Border Grid.Row="1"
+                Style="{DynamicResource Card}"
+                Margin="{DynamicResource Token.Space.Md}">
+            <StackPanel>
+                <TextBlock Text="发起传输" Style="{StaticResource SectionTitle}" Margin="0" />
+
+                <!-- 方向选择：宿主→实例 或 实例→宿主 -->
+                <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Space.Sm}">
+                    <TextBlock Text="传输方向：" VerticalAlignment="Center" Style="{StaticResource CaptionText}" />
+                    <RadioButton Content="宿主→实例"
+                                 IsChecked="{Binding IsHostToInstance}"
+                                 VerticalAlignment="Center"
+                                 Margin="{DynamicResource Token.Space.Sm}" />
+                    <RadioButton Content="实例→宿主"
+                                 IsChecked="{Binding IsInstanceToHost}"
+                                 VerticalAlignment="Center"
+                                 Margin="{DynamicResource Token.Space.Sm}" />
+                </StackPanel>
+
+                <!-- 宿主路径与文件选择 -->
+                <Grid Margin="{DynamicResource Token.Space.Sm}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               Text="宿主路径："
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CaptionText}" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding HostPath, UpdateSourceTrigger=PropertyChanged}"
+                             VerticalAlignment="Center"
+                             Margin="{DynamicResource Token.Space.Sm}" />
+                    <Button Grid.Column="2"
+                            Content="浏览..."
+                            Command="{Binding BrowseHostFileCommand}"
+                            Style="{StaticResource SecondaryButton}"
+                            VerticalAlignment="Center" />
+                </Grid>
+
+                <!-- 实例路径输入 -->
+                <Grid Margin="{DynamicResource Token.Space.Sm}">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               Text="实例路径："
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CaptionText}" />
+                    <TextBox Grid.Column="1"
+                             Text="{Binding GuestPath, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="实例自身文件系统绝对路径（如 /sdcard/...、/data/...，不得越界）"
+                             VerticalAlignment="Center"
+                             Margin="{DynamicResource Token.Space.Sm}" />
+                </Grid>
+
+                <!-- 冲突策略单选 -->
+                <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Space.Sm}">
+                    <TextBlock Text="冲突策略：" VerticalAlignment="Center" Style="{StaticResource CaptionText}" />
+                    <RadioButton Content="拒绝覆盖"
+                                 IsChecked="{Binding IsSkip}"
+                                 VerticalAlignment="Center"
+                                 Margin="{DynamicResource Token.Space.Sm}" />
+                    <RadioButton Content="覆盖目标"
+                                 IsChecked="{Binding IsOverwrite}"
+                                 VerticalAlignment="Center"
+                                 Margin="{DynamicResource Token.Space.Sm}" />
+                </StackPanel>
+
+                <!-- 发起与取消按钮 -->
+                <StackPanel Orientation="Horizontal" Margin="{DynamicResource Token.Space.Sm}">
+                    <Button Content="发起传输"
+                            Command="{Binding StartTransferCommand}"
+                            Margin="{DynamicResource Token.Space.Sm}" />
+                    <Button Content="取消传输"
+                            Command="{Binding CancelTransferCommand}"
+                            Style="{StaticResource SecondaryButton}"
+                            Visibility="{Binding IsTransferring, Converter={StaticResource BoolToVisibility}}"
+                            Margin="{DynamicResource Token.Space.Sm}" />
+                    <TextBlock Text="{Binding CurrentProgressText}"
+                               VerticalAlignment="Center"
+                               Style="{StaticResource CaptionText}"
+                               Visibility="{Binding IsTransferring, Converter={StaticResource BoolToVisibility}}"
+                               Margin="{DynamicResource Token.Space.Sm}" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+
+        <!-- 任务列表区 -->
+        <Border Grid.Row="2"
+                Style="{DynamicResource Card}"
+                Margin="{DynamicResource Token.Space.Md}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="{DynamicResource Token.Space.Sm}">
+                    <TextBlock Text="传输任务列表" Style="{StaticResource SectionTitle}" Margin="0" />
+                </StackPanel>
+
+                <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+                    <ItemsControl ItemsSource="{Binding Tasks}">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Style="{DynamicResource Card}" Margin="{DynamicResource Token.Space.Sm}">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+
+                                        <!-- 第一行：方向胶囊、冲突策略、状态胶囊 -->
+                                        <StackPanel Grid.Row="0" Orientation="Horizontal">
+                                            <Border Style="{StaticResource StatusPill}">
+                                                <TextBlock Text="{Binding DirectionText}" />
+                                            </Border>
+                                            <Border Style="{StaticResource StatusPill}">
+                                                <TextBlock Text="{Binding ConflictPolicyText}" />
+                                            </Border>
+                                            <Border Style="{StaticResource StatusPill}">
+                                                <TextBlock Text="{Binding StateText}" />
+                                            </Border>
+                                            <TextBlock Text="{Binding ProgressText}"
+                                                       Style="{StaticResource CaptionText}"
+                                                       VerticalAlignment="Center"
+                                                       Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                                        </StackPanel>
+
+                                        <!-- 第二行：源路径与目标路径 -->
+                                        <StackPanel Grid.Row="1" Margin="{DynamicResource Token.Space.Sm}">
+                                            <TextBlock Text="{Binding SourcePath}" Style="{StaticResource CaptionText}" Margin="0" />
+                                            <TextBlock Text="{Binding TargetPath}" Style="{StaticResource CaptionText}" Margin="0" />
+                                        </StackPanel>
+
+                                        <!-- 第三行：进度条 -->
+                                        <ProgressBar Grid.Row="2"
+                                                     Minimum="0"
+                                                     Maximum="100"
+                                                     Value="{Binding ProgressPercent}"
+                                                     IsIndeterminate="{Binding IsIndeterminate}"
+                                                     Height="{DynamicResource Token.Space.Sm}"
+                                                     Margin="{DynamicResource Token.Space.Sm}" />
+
+                                        <!-- 第四行：失败原因（如有） -->
+                                        <TextBlock Grid.Row="3"
+                                                   Text="{Binding FailureReason}"
+                                                   Foreground="{DynamicResource Token.Color.State.Danger}"
+                                                   Style="{StaticResource CaptionText}"
+                                                   Visibility="{Binding HasFailure, Converter={StaticResource BoolToVisibility}}"
+                                                   Margin="{DynamicResource Token.Space.Sm}" />
+                                    </Grid>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Grid>
+        </Border>
+
+        <!-- 底部失败提示条 -->
+        <Border Grid.Row="3"
+                Style="{DynamicResource RiskBanner}"
+                Visibility="{Binding HasFailure, Converter={StaticResource BoolToVisibility}}">
+            <StackPanel Orientation="Horizontal">
+                <Image Source="{StaticResource Icon.ErrorEnvironment}"
+                       Style="{StaticResource SectionHeaderIcon}"
+                       VerticalAlignment="Center" />
+                <TextBlock Text="{Binding FailureText}"
+                           TextWrapping="Wrap"
+                           VerticalAlignment="Center"
+                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

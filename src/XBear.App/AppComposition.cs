@@ -100,6 +100,14 @@ public static class AppComposition
 
         var projectionWindows = new Views.ProjectionWindowHost(projection, terms);
 
+        Func<string, int?> getAdbPort = id => manager.AllocatedPorts.TryGetValue(id, out AllocatedPorts? ports) ? ports.Adb : null;
+        var fileTransferService = new Core.FileTransfers.FileTransferService();
+        var fileTransferWindows = new Views.FileTransferWindowHost(fileTransferService, getAdbPort, terms);
+        var applicationService = new Core.Applications.ApplicationService();
+        var applicationWindows = new Views.ApplicationWindowHost(applicationService, getAdbPort, terms);
+        var moduleInstallerService = new Core.Modules.ModuleInstallerService();
+        var moduleWindows = new Views.ModuleWindowHost(moduleInstallerService, getAdbPort, terms);
+
         return new AppServices(
             repository,
             manager,
@@ -115,7 +123,13 @@ public static class AppComposition
             initrdCustomizer,
             baseImageImporter,
             projection,
-            projectionWindows);
+            projectionWindows,
+            fileTransferService,
+            fileTransferWindows,
+            applicationService,
+            applicationWindows,
+            moduleInstallerService,
+            moduleWindows);
     }
 
     /// <summary>
@@ -220,6 +234,12 @@ public sealed record ManifestRejection(string ManifestName, string Reason);
 /// <param name="Importer">base 镜像导入服务。</param>
 /// <param name="Projection">投屏服务。</param>
 /// <param name="ProjectionWindows">投屏窗口宿主。</param>
+/// <param name="FileTransfer">文件传输服务。</param>
+/// <param name="FileTransferWindows">文件传输窗口宿主。</param>
+/// <param name="Applications">应用管理服务。</param>
+/// <param name="ApplicationWindows">应用管理窗口宿主。</param>
+/// <param name="Modules">模块安装服务。</param>
+/// <param name="ModuleWindows">模块管理窗口宿主。</param>
 public sealed record AppServices(
     IInstanceRepository Repository,
     InstanceManager Manager,
@@ -235,4 +255,10 @@ public sealed record AppServices(
     InitrdCustomizerService InitrdCustomizer,
     BaseImageImportService Importer,
     IProjectionService Projection,
-    Views.IProjectionWindowHost ProjectionWindows);
+    Views.IProjectionWindowHost ProjectionWindows,
+    Core.FileTransfers.FileTransferService FileTransfer,
+    Views.IFileTransferWindowHost FileTransferWindows,
+    Core.Applications.ApplicationService Applications,
+    Views.IApplicationWindowHost ApplicationWindows,
+    Core.Modules.ModuleInstallerService Modules,
+    Views.IModuleWindowHost ModuleWindows);

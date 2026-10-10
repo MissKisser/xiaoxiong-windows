@@ -19,14 +19,14 @@ public class ThemeAndIconTests
     private readonly SpecLoader _spec = XBeeSpec.TestSpec();
 
     /// <summary>
-    /// 共享规格定义的 19 个图标必须在图标资源字典中逐一登记，
+    /// 共享规格定义的 21 个图标必须在图标资源字典中逐一登记，
     /// 且均为合法可渲染的矢量绘制，尺寸档位均不低于 16 像素。
     /// </summary>
     [Fact]
-    public void AllNineteenIconsAreRegisteredInResourceDictionary()
+    public void AllTwentyOneIconsAreRegisteredInResourceDictionary()
     {
-        Assert.Equal(19, IconKeys.All.Count);
-        Assert.Equal(19, IconKeys.All.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(21, IconKeys.All.Count);
+        Assert.Equal(21, IconKeys.All.Distinct(StringComparer.Ordinal).Count());
 
         var resources = LoadDictionary("Theme/IconResources.xaml");
 

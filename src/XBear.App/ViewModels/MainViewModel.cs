@@ -25,6 +25,9 @@ public sealed partial class MainViewModel : ObservableObject
     private CancellationTokenSource? _importCts;
     private InputProbeResult _inputChannel = new(InputChannelKind.Unknown);
     private readonly Views.IProjectionWindowHost? _projectionWindows;
+    private readonly Views.IFileTransferWindowHost? _fileTransferWindows;
+    private readonly Views.IApplicationWindowHost? _applicationWindows;
+    private readonly Views.IModuleWindowHost? _moduleWindows;
 
     [ObservableProperty]
     private InstanceListItemViewModel? _selected;
@@ -77,6 +80,9 @@ public sealed partial class MainViewModel : ObservableObject
     /// <param name="importer">base 镜像导入服务，为 null 时使用默认镜像根目录下的真实导入。</param>
     /// <param name="bootAssetExtractor">引导资产提取服务，为 null 时不执行引导资产提取与定制。</param>
     /// <param name="projectionWindows">投屏窗口宿主，为 null 时不提供投屏入口。</param>
+    /// <param name="fileTransferWindows">文件传输窗口宿主，为 null 时不提供文件传输入口。</param>
+    /// <param name="applicationWindows">应用管理窗口宿主，为 null 时不提供应用管理入口。</param>
+    /// <param name="moduleWindows">模块管理窗口宿主，为 null 时不提供模块管理入口。</param>
     public MainViewModel(
         IInstanceRepository repository,
         InstanceManager? manager,
@@ -86,7 +92,10 @@ public sealed partial class MainViewModel : ObservableObject
         VersionDocument? version = null,
         BaseImageImportService? importer = null,
         BootAssetExtractorService? bootAssetExtractor = null,
-        Views.IProjectionWindowHost? projectionWindows = null)
+        Views.IProjectionWindowHost? projectionWindows = null,
+        Views.IFileTransferWindowHost? fileTransferWindows = null,
+        Views.IApplicationWindowHost? applicationWindows = null,
+        Views.IModuleWindowHost? moduleWindows = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(images);
@@ -101,6 +110,9 @@ public sealed partial class MainViewModel : ObservableObject
         _importer = importer ?? new BaseImageImportService(BaseImageImportService.DefaultImagesRoot);
         _bootAssetExtractor = bootAssetExtractor;
         _projectionWindows = projectionWindows;
+        _fileTransferWindows = fileTransferWindows;
+        _applicationWindows = applicationWindows;
+        _moduleWindows = moduleWindows;
 
         VersionDocument versionDoc = version ?? diagnostics.Version;
         ProductVersion = versionDoc.Product.Version;
@@ -283,6 +295,117 @@ public sealed partial class MainViewModel : ObservableObject
         }
 
         _projectionWindows.Close(Selected.Id);
+    }
+
+    /// <summary>文件传输入口是否可用。要求实例处于运行态。</summary>
+    public bool CanOpenFileTransfer =>
+        _fileTransferWindows is not null &&
+        Selected is not null &&
+        Selected.State == InstanceState.Running;
+
+    /// <summary>打开文件传输按钮文案。</summary>
+    public string OpenFileTransferText => string.Concat("打开", _terms.FileTransfer);
+
+    /// <summary>
+    /// 为选中且运行中的实例打开文件传输窗口。同一实例已有窗口时置前。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenFileTransfer))]
+    public void OpenFileTransfer()
+    {
+        if (_fileTransferWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _fileTransferWindows.Open(Selected.Id, Selected.DisplayName, ProjectionOwner);
+    }
+
+    /// <summary>
+    /// 关闭选中实例的文件传输窗口。未打开时不做任何事。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenFileTransfer))]
+    public void CloseSelectedFileTransfer()
+    {
+        if (_fileTransferWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _fileTransferWindows.Close(Selected.Id);
+    }
+
+    /// <summary>应用管理入口是否可用。要求实例处于运行态。</summary>
+    public bool CanOpenApplications =>
+        _applicationWindows is not null &&
+        Selected is not null &&
+        Selected.State == InstanceState.Running;
+
+    /// <summary>管理应用按钮文案。</summary>
+    public string OpenApplicationsText => string.Concat("管理", _terms.Application);
+
+    /// <summary>
+    /// 为选中且运行中的实例打开应用管理窗口。同一实例已有窗口时置前。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenApplications))]
+    public void OpenApplications()
+    {
+        if (_applicationWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _applicationWindows.Open(Selected.Id, Selected.DisplayName, ProjectionOwner);
+    }
+
+    /// <summary>
+    /// 关闭选中实例的应用管理窗口。未打开时不做任何事。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenApplications))]
+    public void CloseSelectedApplications()
+    {
+        if (_applicationWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _applicationWindows.Close(Selected.Id);
+    }
+
+    /// <summary>模块管理入口是否可用。要求实例处于运行态。</summary>
+    public bool CanOpenModules =>
+        _moduleWindows is not null &&
+        Selected is not null &&
+        Selected.State == InstanceState.Running;
+
+    /// <summary>管理模块按钮文案。</summary>
+    public string OpenModulesText => string.Concat("管理", _terms.Module);
+
+    /// <summary>
+    /// 为选中且运行中的实例打开模块管理窗口。同一实例已有窗口时置前。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenModules))]
+    public void OpenModules()
+    {
+        if (_moduleWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _moduleWindows.Open(Selected.Id, Selected.DisplayName, ProjectionOwner);
+    }
+
+    /// <summary>
+    /// 关闭选中实例的模块管理窗口。未打开时不做任何事。
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanOpenModules))]
+    public void CloseSelectedModules()
+    {
+        if (_moduleWindows is null || Selected is null)
+        {
+            return;
+        }
+
+        _moduleWindows.Close(Selected.Id);
     }
 
     /// <summary>投屏窗口的宿主窗口，供视图模型在开窗时指定归属。</summary>
@@ -806,6 +929,12 @@ public sealed partial class MainViewModel : ObservableObject
         StopSelectedCommand.NotifyCanExecuteChanged();
         OpenProjectionCommand.NotifyCanExecuteChanged();
         CloseSelectedProjectionCommand.NotifyCanExecuteChanged();
+        OpenFileTransferCommand.NotifyCanExecuteChanged();
+        CloseSelectedFileTransferCommand.NotifyCanExecuteChanged();
+        OpenApplicationsCommand.NotifyCanExecuteChanged();
+        CloseSelectedApplicationsCommand.NotifyCanExecuteChanged();
+        OpenModulesCommand.NotifyCanExecuteChanged();
+        CloseSelectedModulesCommand.NotifyCanExecuteChanged();
     }
 
     private void RefreshDetail()
@@ -905,10 +1034,19 @@ public sealed partial class MainViewModel : ObservableObject
             // 实例已停止时投屏画面不再更新，投屏窗口必须随之关闭，
             // 否则窗口会一直停在最后一帧上，让人以为画面还活着。
             _projectionWindows?.Close(e.InstanceId);
+            _fileTransferWindows?.Close(e.InstanceId);
+            _applicationWindows?.Close(e.InstanceId);
+            _moduleWindows?.Close(e.InstanceId);
         }
 
         OpenProjectionCommand.NotifyCanExecuteChanged();
         CloseSelectedProjectionCommand.NotifyCanExecuteChanged();
+        OpenFileTransferCommand.NotifyCanExecuteChanged();
+        CloseSelectedFileTransferCommand.NotifyCanExecuteChanged();
+        OpenApplicationsCommand.NotifyCanExecuteChanged();
+        CloseSelectedApplicationsCommand.NotifyCanExecuteChanged();
+        OpenModulesCommand.NotifyCanExecuteChanged();
+        CloseSelectedModulesCommand.NotifyCanExecuteChanged();
 
         if (Selected is not null && string.Equals(Selected.Id, e.InstanceId, StringComparison.Ordinal))
         {

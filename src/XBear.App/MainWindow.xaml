@@ -222,6 +222,36 @@
                                            Margin="{DynamicResource Space.Margin.BesideIcon}" />
                             </StackPanel>
                         </Button>
+                        <Button Style="{StaticResource SecondaryButton}" Command="{Binding OpenFileTransferCommand}">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.FileTransfer}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding OpenFileTransferText}"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource SecondaryButton}" Command="{Binding OpenApplicationsCommand}">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Application}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding OpenApplicationsText}"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource SecondaryButton}" Command="{Binding OpenModulesCommand}">
+                            <StackPanel Orientation="Horizontal">
+                                <Image Source="{StaticResource Icon.Module}"
+                                       Width="{DynamicResource Icon.Size.Sm}"
+                                       Height="{DynamicResource Icon.Size.Sm}"
+                                       VerticalAlignment="Center" />
+                                <TextBlock Text="{Binding OpenModulesText}"
+                                           Margin="{DynamicResource Space.Margin.BesideIcon}" />
+                            </StackPanel>
+                        </Button>
                         <Button Style="{StaticResource SecondaryButton}" Click="OnChooseDiagnosticsDirectory">
                             <StackPanel Orientation="Horizontal">
                                 <Image Source="{StaticResource Icon.Diagnostics}"
