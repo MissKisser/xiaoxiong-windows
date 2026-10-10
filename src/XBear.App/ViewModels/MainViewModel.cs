@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using System.Windows;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -19,6 +20,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly DiagnosticsExporter _diagnostics;
     private readonly TerminologyCatalog _terms;
     private readonly BaseImageImportService _importer;
+    private readonly BootAssetExtractorService? _bootAssetExtractor;
     private readonly Dictionary<string, ImageSpec> _images;
     private CancellationTokenSource? _importCts;
     private InputProbeResult _inputChannel = new(InputChannelKind.Unknown);
@@ -70,8 +72,9 @@ public sealed partial class MainViewModel : ObservableObject
     /// <param name="images">镜像清单，按标识索引。</param>
     /// <param name="diagnostics">诊断包导出器。</param>
     /// <param name="terms">界面文案术语来源。</param>
-/// <param name="version">版本契约文档，为空时从诊断包导出器获取。</param>
+    /// <param name="version">版本契约文档，为空时从诊断包导出器获取。</param>
     /// <param name="importer">base 镜像导入服务，为 null 时使用默认镜像根目录下的真实导入。</param>
+    /// <param name="bootAssetExtractor">引导资产提取服务，为 null 时不执行引导资产提取与定制。</param>
     public MainViewModel(
         IInstanceRepository repository,
         InstanceManager? manager,
@@ -79,7 +82,8 @@ public sealed partial class MainViewModel : ObservableObject
         DiagnosticsExporter diagnostics,
         TerminologyCatalog terms,
         VersionDocument? version = null,
-        BaseImageImportService? importer = null)
+        BaseImageImportService? importer = null,
+        BootAssetExtractorService? bootAssetExtractor = null)
     {
         ArgumentNullException.ThrowIfNull(repository);
         ArgumentNullException.ThrowIfNull(images);
@@ -92,6 +96,7 @@ public sealed partial class MainViewModel : ObservableObject
         _diagnostics = diagnostics;
         _terms = terms;
         _importer = importer ?? new BaseImageImportService(BaseImageImportService.DefaultImagesRoot);
+        _bootAssetExtractor = bootAssetExtractor;
 
         VersionDocument versionDoc = version ?? diagnostics.Version;
         ProductVersion = versionDoc.Product.Version;
@@ -360,6 +365,29 @@ public sealed partial class MainViewModel : ObservableObject
         try
         {
             await _importer.ImportAsync(sourceImagePath, OnImportProgress, cts.Token).ConfigureAwait(true);
+
+            if (_bootAssetExtractor is not null && IsIsoSource(sourceImagePath))
+            {
+                cts.Token.ThrowIfCancellationRequested();
+
+                (string kernelName, string initrdName) = ResolveBootAssetNames(sourceImagePath);
+                string stem = Path.GetFileNameWithoutExtension(sourceImagePath);
+                string targetDir = Path.Combine(_importer.ImagesRoot, stem);
+
+                await _bootAssetExtractor.ExtractAsync(
+                    sourceImagePath,
+                    kernelName,
+                    initrdName,
+                    OnExtractProgress,
+                    targetDir,
+                    cts.Token).ConfigureAwait(true);
+
+                SyncBootAssetsToImagesRoot(targetDir, _importer.ImagesRoot, kernelName, initrdName);
+            }
+
+            ImportPercent = 100;
+            ImportPercentText = "100%";
+            ImportStageText = BaseImageImportService.ImportedText;
         }
         catch (OperationCanceledException)
         {
@@ -426,6 +454,148 @@ public sealed partial class MainViewModel : ObservableObject
 
         ImportPercent = percent;
         ImportPercentText = $"{percent}%";
+    }
+
+    /// <summary>
+    /// 接收引导资产提取进度回调。
+    /// </summary>
+    /// <param name="progress">引导资产提取进度快照。</param>
+    private void OnExtractProgress(BootAssetExtractionProgress progress)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+
+        if (dispatcher is null || dispatcher.CheckAccess())
+        {
+            ApplyExtractProgress(progress);
+            return;
+        }
+
+        dispatcher.BeginInvoke(new Action(() => ApplyExtractProgress(progress)));
+    }
+
+    /// <summary>
+    /// 将引导资产提取进度刷到界面。
+    /// </summary>
+    /// <param name="progress">引导资产提取进度快照。</param>
+    private void ApplyExtractProgress(BootAssetExtractionProgress progress)
+    {
+        HasImportProgress = true;
+        if (progress.Phase == BootAssetExtractionPhase.Running)
+        {
+            ImportStageText = string.IsNullOrWhiteSpace(progress.CurrentFile)
+                ? "正在提取引导资产"
+                : $"正在提取引导资产（{progress.CurrentFile}）";
+            ImportDetailText = $"正在提取与定制引导资产：{progress.CurrentFile}";
+        }
+    }
+
+    /// <summary>判断源文件是否为 ISO 镜像或带有 ISO9660 卷头。</summary>
+    private static bool IsIsoSource(string path)
+    {
+        if (path.EndsWith(".iso", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (stream.Length < 17 * 2048)
+            {
+                return false;
+            }
+
+            stream.Seek(16 * 2048, SeekOrigin.Begin);
+            byte[] header = new byte[6];
+            int read = stream.Read(header, 0, 6);
+            return read == 6 &&
+                   header[0] == 0x01 &&
+                   header[1] == (byte)'C' &&
+                   header[2] == (byte)'D' &&
+                   header[3] == (byte)'0' &&
+                   header[4] == (byte)'0' &&
+                   header[5] == (byte)'1';
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 解析目标镜像的引导资产文件名（kernel 与 initrd.img）。
+    /// </summary>
+    private (string Kernel, string Initrd) ResolveBootAssetNames(string sourceImagePath)
+    {
+        string stem = Path.GetFileNameWithoutExtension(sourceImagePath);
+        if (_images.TryGetValue(stem, out ImageSpec? spec) && spec.Boot is not null)
+        {
+            return (
+                string.IsNullOrWhiteSpace(spec.Boot.Kernel) ? "kernel" : spec.Boot.Kernel,
+                string.IsNullOrWhiteSpace(spec.Boot.Initrd) ? "initrd.img" : spec.Boot.Initrd);
+        }
+
+        foreach (ImageSpec image in _images.Values)
+        {
+            if (image.Boot is not null)
+            {
+                return (
+                    string.IsNullOrWhiteSpace(image.Boot.Kernel) ? "kernel" : image.Boot.Kernel,
+                    string.IsNullOrWhiteSpace(image.Boot.Initrd) ? "initrd.img" : image.Boot.Initrd);
+            }
+        }
+
+        return ("kernel", "initrd.img");
+    }
+
+    /// <summary>
+    /// 同步引导资产到镜像根目录，使直接引用根目录与引用子目录的两种路径皆可直达。
+    /// </summary>
+    private static void SyncBootAssetsToImagesRoot(
+        string targetDir,
+        string imagesRoot,
+        string kernelName,
+        string initrdName)
+    {
+        if (string.Equals(targetDir, imagesRoot, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        try
+        {
+            string sourceKernel = Path.Combine(targetDir, kernelName);
+            string destKernel = Path.Combine(imagesRoot, kernelName);
+            if (File.Exists(sourceKernel) && !File.Exists(destKernel))
+            {
+                File.Copy(sourceKernel, destKernel, overwrite: true);
+            }
+
+            string sourceInitrd = Path.Combine(targetDir, initrdName);
+            string destInitrd = Path.Combine(imagesRoot, initrdName);
+            if (File.Exists(sourceInitrd))
+            {
+                File.Copy(sourceInitrd, destInitrd, overwrite: true);
+            }
+
+            string stockName = initrdName + InitrdCustomizerService.StockSuffix;
+            string sourceStock = Path.Combine(targetDir, stockName);
+            string destStock = Path.Combine(imagesRoot, stockName);
+            if (File.Exists(sourceStock))
+            {
+                File.Copy(sourceStock, destStock, overwrite: true);
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     /// <summary>

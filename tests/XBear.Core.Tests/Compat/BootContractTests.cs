@@ -72,7 +72,11 @@ public class BootContractTests
         Assert.Null(spec.Boot);
 
         var reserialized = JsonSerializer.Serialize(spec, SpecLoader.SerializerOptions);
-        Assert.DoesNotContain("boot", reserialized, StringComparison.Ordinal);
+
+        // 只判顶层键是否存在，不用整段文本的子串搜索代替：
+        // 镜像证据等自由文本可能合法地含有 boot 一词，子串搜索会把它们误判成键被写回。
+        var roundTripped = JsonNode.Parse(reserialized)!.AsObject();
+        Assert.False(roundTripped.ContainsKey("boot"));
     }
 
     /// <summary>

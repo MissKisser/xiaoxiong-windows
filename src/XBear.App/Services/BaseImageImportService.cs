@@ -73,6 +73,9 @@ public sealed class BaseImageImportService
     private readonly Func<Action<string>, IQcow2Manager> _managerFactory;
     private readonly TimeSpan _pollInterval;
 
+    /// <summary>base 镜像输出根目录。</summary>
+    public string ImagesRoot => _imagesRoot;
+
     /// <summary>
     /// 以默认采样间隔构造导入服务。
     /// </summary>

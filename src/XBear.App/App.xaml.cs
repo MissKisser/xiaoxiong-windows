@@ -146,7 +146,10 @@ public partial class App : Application
                 _services.Manager,
                 _services.Images,
                 _services.Diagnostics,
-                _services.Terms);
+                _services.Terms,
+                version: null,
+                importer: _services.Importer,
+                bootAssetExtractor: _services.BootAssetExtractor);
 
             if (Theme.WindowIcon.Create(Resources) is BitmapSource icon)
             {

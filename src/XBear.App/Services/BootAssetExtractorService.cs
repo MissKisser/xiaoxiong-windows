@@ -75,20 +75,42 @@ public sealed class BootAssetExtractorService
     private const byte FileRecordFlag = 0x80;
 
     private readonly string _imagesRoot;
+    private readonly InitrdCustomizerService? _initrdCustomizer;
+
+    /// <summary>镜像根目录。</summary>
+    public string ImagesRoot => _imagesRoot;
+
+    /// <summary>所装配的 initrd 定制服务（若有）。</summary>
+    public InitrdCustomizerService? InitrdCustomizer => _initrdCustomizer;
+
+    /// <summary>
+    /// 构造提取服务，不对提取出的 initrd 做定制。
+    /// </summary>
+    /// <param name="imagesRoot">镜像根目录，与 BaseImageImportService 的语义一致。</param>
+    public BootAssetExtractorService(string imagesRoot)
+        : this(imagesRoot, null)
+    {
+    }
 
     /// <summary>
     /// 构造提取服务。
     /// </summary>
     /// <param name="imagesRoot">镜像根目录，与 BaseImageImportService 的语义一致。</param>
-    public BootAssetExtractorService(string imagesRoot)
+    /// <param name="initrdCustomizer">
+    /// initrd 定制服务，为 null 时只提取原版文件。
+    /// </param>
+    public BootAssetExtractorService(string imagesRoot, InitrdCustomizerService? initrdCustomizer)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(imagesRoot);
         _imagesRoot = imagesRoot;
+        _initrdCustomizer = initrdCustomizer;
     }
 
     /// <summary>
     /// 从 ISO 镜像提取 boot 引导资产（kernel 与 initrd.img）。
     /// 幂等：目标已存在时跳过提取并报告 AlreadyExtracted。
+    /// 装配了 initrd 定制服务时，提取到的 initrd 会进一步加工为带调试通路的版本，
+    /// 文件名保持不变，因此 boot 推荐引用与实例配置都无需改动。
     /// </summary>
     /// <param name="isoPath">源 ISO 镜像路径。</param>
     /// <param name="kernelFileName">内核文件名。</param>
@@ -96,12 +118,34 @@ public sealed class BootAssetExtractorService
     /// <param name="report">进度上报回调。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>终态进度。</returns>
-    /// <exception cref="XBearException">镜像不可读或提取失败时抛出。</exception>
+    /// <exception cref="XBearException">镜像不可读、提取失败或 initrd 定制失败时抛出。</exception>
+    public Task<BootAssetExtractionProgress> ExtractAsync(
+        string isoPath,
+        string kernelFileName,
+        string initrdFileName,
+        Action<BootAssetExtractionProgress> report,
+        CancellationToken cancellationToken = default)
+        => ExtractAsync(isoPath, kernelFileName, initrdFileName, report, targetDirectory: null, cancellationToken);
+
+    /// <summary>
+    /// 从 ISO 镜像提取 boot 引导资产（kernel 与 initrd.img）到指定目标目录。
+    /// 幂等：目标已存在时跳过提取并报告 AlreadyExtracted。
+    /// 装配了 initrd 定制服务时，提取到的 initrd 会进一步加工为带调试通路的版本。
+    /// </summary>
+    /// <param name="isoPath">源 ISO 镜像路径。</param>
+    /// <param name="kernelFileName">内核文件名。</param>
+    /// <param name="initrdFileName">initrd 文件名。</param>
+    /// <param name="report">进度上报回调。</param>
+    /// <param name="targetDirectory">目标输出目录；为 null 时优先使用 ISO 所在目录或镜像根目录。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>终态进度。</returns>
+    /// <exception cref="XBearException">镜像不可读、提取失败或 initrd 定制失败时抛出。</exception>
     public async Task<BootAssetExtractionProgress> ExtractAsync(
         string isoPath,
         string kernelFileName,
         string initrdFileName,
         Action<BootAssetExtractionProgress> report,
+        string? targetDirectory,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(isoPath);
@@ -118,7 +162,8 @@ public sealed class BootAssetExtractorService
             report(new BootAssetExtractionProgress(phase, currentFile, stopwatch.Elapsed));
         }
 
-        string imageDirectory = Path.GetDirectoryName(isoPath) ?? _imagesRoot;
+        string imageDirectory = targetDirectory ?? Path.GetDirectoryName(isoPath) ?? _imagesRoot;
+        Directory.CreateDirectory(imageDirectory);
         string kernelTarget = Path.Combine(imageDirectory, kernelFileName);
         string initrdTarget = Path.Combine(imageDirectory, initrdFileName);
 
@@ -126,20 +171,26 @@ public sealed class BootAssetExtractorService
         bool kernelExists = File.Exists(kernelTarget);
         bool initrdExists = File.Exists(initrdTarget);
 
-        if (kernelExists && initrdExists)
-        {
-            var result = new BootAssetExtractionProgress(
-                BootAssetExtractionPhase.AlreadyExtracted,
-                string.Empty,
-                stopwatch.Elapsed);
-            report(result);
-            return result;
-        }
-
-        Publish(BootAssetExtractionPhase.Running, kernelFileName);
-
         try
         {
+            if (kernelExists && initrdExists)
+            {
+                // 目标已存在时仍需确认定制状态：上一次导入可能未装配定制服务，
+                // 或宿主的 ADB 公钥发生过轮换。定制服务自带策略指纹判重，重复调用无副作用。
+                await CustomizeInitrdAsync(initrdTarget, initrdFileName, Publish, cancellationToken)
+                    .ConfigureAwait(false);
+
+                stopwatch.Stop();
+                var reused = new BootAssetExtractionProgress(
+                    BootAssetExtractionPhase.AlreadyExtracted,
+                    string.Empty,
+                    stopwatch.Elapsed);
+                report(reused);
+                return reused;
+            }
+
+            Publish(BootAssetExtractionPhase.Running, kernelFileName);
+
             using var isoStream = new FileStream(
                 isoPath,
                 FileMode.Open,
@@ -190,11 +241,19 @@ public sealed class BootAssetExtractorService
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // 原版 initrd 落位后再定制，文件名保持不变。
+            await CustomizeInitrdAsync(initrdTarget, initrdFileName, Publish, cancellationToken)
+                .ConfigureAwait(false);
+
             stopwatch.Stop();
-            return new BootAssetExtractionProgress(
+            var finished = new BootAssetExtractionProgress(
                 BootAssetExtractionPhase.AlreadyExtracted,
                 string.Empty,
                 stopwatch.Elapsed);
+            report(finished);
+            return finished;
         }
         catch (OperationCanceledException)
         {
@@ -215,6 +274,30 @@ public sealed class BootAssetExtractorService
                 "确认 ISO 镜像完整且可读，且包含 boot 配置中指定的文件。",
                 ex);
         }
+    }
+
+    /// <summary>
+    /// 对已落位的 initrd 执行定制。未装配定制服务时不做任何处理。
+    /// </summary>
+    /// <param name="initrdTarget">initrd 文件路径。</param>
+    /// <param name="initrdFileName">initrd 文件名，用于进度上报。</param>
+    /// <param name="publish">进度发布回调。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>异步任务。</returns>
+    private async Task CustomizeInitrdAsync(
+        string initrdTarget,
+        string initrdFileName,
+        Action<BootAssetExtractionPhase, string> publish,
+        CancellationToken cancellationToken)
+    {
+        if (_initrdCustomizer is null || !File.Exists(initrdTarget))
+        {
+            return;
+        }
+
+        publish(BootAssetExtractionPhase.Running, initrdFileName);
+
+        await _initrdCustomizer.CustomizeAsync(initrdTarget, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -247,8 +330,8 @@ public sealed class BootAssetExtractorService
         var rootDirEntry = new byte[34];
         stream.Seek(pvdOffset + 156, SeekOrigin.Begin);
         await stream.ReadAsync(rootDirEntry.AsMemory(0, 34), cancellationToken);
-        long rootDirSector = ReadUInt32Msb(rootDirEntry, 2);
-        int rootDirSize = ReadUInt32MsbAsInt(rootDirEntry, 10);
+        long rootDirSector = ReadIsoUInt32(rootDirEntry, 2);
+        int rootDirSize = (int)ReadIsoUInt32(rootDirEntry, 10);
 
         // 读取根目录下的所有文件项。
         await ParseDirectoryAsync(stream, rootDirSector, rootDirSize, files, cancellationToken);
@@ -304,7 +387,7 @@ public sealed class BootAssetExtractorService
             }
 
             byte nameLength = header[DirEntryNameLengthOffset];
-            bool isFile = (header[DirEntryFileFlagsOffset] & FileRecordFlag) == 0;
+            bool isFile = (header[DirEntryFileFlagsOffset] & 0x02) == 0 && (header[DirEntryFileFlagsOffset] & FileRecordFlag) == 0;
 
             // 读取文件名。
             var nameBytes = new byte[nameLength];
@@ -316,8 +399,8 @@ public sealed class BootAssetExtractorService
                 string name = System.Text.Encoding.ASCII.GetString(nameBytes)
                     .Split(';')[0]
                     .TrimEnd('\0');
-                long fileSector = ReadUInt32Msb(header, DirEntryLocationOffset);
-                int fileSize = ReadUInt32MsbAsInt(header, DirEntryDataSizeOffset);
+                long fileSector = ReadIsoUInt32(header, DirEntryLocationOffset);
+                int fileSize = (int)ReadIsoUInt32(header, DirEntryDataSizeOffset);
 
                 // 只收录根目录下的直接文件（不递归子目录）。
                 if (!string.IsNullOrWhiteSpace(name) && !name.StartsWith("."))
@@ -380,6 +463,33 @@ public sealed class BootAssetExtractorService
         }
     }
 
+    /// <summary>从字节数组读取 ISO9660 32 位双端整数（先尝试小端，若有大端副本且一致则核对）。</summary>
+    private static long ReadIsoUInt32(byte[] buffer, int offset)
+    {
+        long lsb = ReadUInt32Lsb(buffer, offset);
+        if (offset + 7 < buffer.Length)
+        {
+            long msb = ReadUInt32Msb(buffer, offset + 4);
+            if (lsb == msb && lsb >= 0)
+            {
+                return lsb;
+            }
+        }
+
+        // 兼容测试桩可能仅在 offset 写入大端的情况：
+        long directMsb = ReadUInt32Msb(buffer, offset);
+        return lsb > 0 && lsb < 0x10000000L ? lsb : directMsb;
+    }
+
+    /// <summary>从字节数组读取小端无符号 32 位整数。</summary>
+    private static long ReadUInt32Lsb(byte[] buffer, int offset)
+    {
+        return (long)buffer[offset] |
+               ((long)buffer[offset + 1] << 8) |
+               ((long)buffer[offset + 2] << 16) |
+               ((long)buffer[offset + 3] << 24);
+    }
+
     /// <summary>从字节数组读取大端无符号 32 位整数。</summary>
     private static long ReadUInt32Msb(byte[] buffer, int offset)
     {
@@ -387,11 +497,5 @@ public sealed class BootAssetExtractorService
                ((long)buffer[offset + 1] << 16) |
                ((long)buffer[offset + 2] << 8) |
                buffer[offset + 3];
-    }
-
-    /// <summary>从字节数组读取大端无符号 32 位整数（作为 int）。</summary>
-    private static int ReadUInt32MsbAsInt(byte[] buffer, int offset)
-    {
-        return (int)ReadUInt32Msb(buffer, offset);
     }
 }

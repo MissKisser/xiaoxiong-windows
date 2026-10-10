@@ -31,6 +31,16 @@ public class FidelitySemanticsTests
             { "untested" }
         };
 
+    /// <summary>已完成实测并结论为通过的保真度项。</summary>
+    public static TheoryData<string> MeasuredPassKeys =>
+        new()
+        {
+            { "P1_root" },
+            { "P2_systemWrite" },
+            { "P3_moduleFlash" },
+            { "P5_rootPersist" }
+        };
+
     [Fact]
     public void VerificationStateHasExactlyThreeValues()
     {
@@ -88,18 +98,19 @@ public class FidelitySemanticsTests
     }
 
     /// <summary>
-    /// 验证镜像样例的保真度字段如实反映实测事实，未实测或不达标项均不标记为通过。
+    /// 验证镜像样例的保真度字段如实反映实测事实。
+    /// 声称通过的项必须确有实测依据，未实测项一律保持 untested。
     /// </summary>
     /// <param name="key">保真度逐项键名。</param>
     /// <param name="expected">期望的实测或未测状态。</param>
     [Theory]
-    [InlineData("P1_root", "fail")]
-    [InlineData("P2_systemWrite", "fail")]
-    [InlineData("P3_moduleFlash", "untested")]
+    [InlineData("P1_root", "pass")]
+    [InlineData("P2_systemWrite", "pass")]
+    [InlineData("P3_moduleFlash", "pass")]
     [InlineData("P4_imageSwap", "untested")]
-    [InlineData("P5_rootPersist", "untested")]
+    [InlineData("P5_rootPersist", "pass")]
     [InlineData("P6_armApp", "untested")]
-    public void SampleFidelityReflectsMeasuredFactsAndNeverClaimsPass(string key, string expected)
+    public void SampleFidelityReflectsMeasuredFacts(string key, string expected)
     {
         var value = JsonNode.Parse(SpecTestHost.ImageJson())!["verified"]!["fidelity"]![key]!
             .GetValue<string>();
@@ -108,18 +119,29 @@ public class FidelitySemanticsTests
     }
 
     /// <summary>
-    /// 验证镜像样例中没有任何保真度项声称通过。
+    /// 验证只有列入实测通过清单的保真度项才声称通过，
+    /// 清单之外的项一律保持 untested，既不臆测通过也不臆测失败。
     /// </summary>
     [Fact]
-    public void NoFidelityItemInSampleClaimsPass()
+    public void OnlyMeasuredFidelityItemsClaimPass()
     {
         var fidelity = JsonNode.Parse(SpecTestHost.ImageJson())!["verified"]!["fidelity"]!.AsObject();
+        var measuredPass = MeasuredPassKeys
+            .Select(row => (string)row[0]!)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToArray();
 
-        Assert.NotEmpty(fidelity);
-        foreach (var item in fidelity)
-        {
-            Assert.NotEqual("pass", item.Value!.GetValue<string>());
-        }
+        var claimedPass = fidelity
+            .Where(item => item.Value!.GetValue<string>() == "pass")
+            .Select(item => item.Key)
+            .OrderBy(k => k, StringComparer.Ordinal)
+            .ToArray();
+
+        Assert.Equal(measuredPass, claimedPass);
+
+        Assert.All(
+            fidelity.Where(item => !measuredPass.Contains(item.Key, StringComparer.Ordinal)),
+            item => Assert.Equal("untested", item.Value!.GetValue<string>()));
     }
 
     /// <summary>
@@ -131,18 +153,19 @@ public class FidelitySemanticsTests
         var spec = SpecTestHost.Loader.ParseImage(SpecTestHost.ImageJson());
 
         var fidelity = spec.Verified!.Fidelity;
-        Assert.Equal(VerificationState.Fail, fidelity.P1Root);
-        Assert.Equal(VerificationState.Fail, fidelity.P2SystemWrite);
-        Assert.Equal(VerificationState.Untested, fidelity.P3ModuleFlash);
+        Assert.Equal(VerificationState.Pass, fidelity.P1Root);
+        Assert.Equal(VerificationState.Pass, fidelity.P2SystemWrite);
+        Assert.Equal(VerificationState.Pass, fidelity.P3ModuleFlash);
         Assert.Equal(VerificationState.Untested, fidelity.P4ImageSwap);
-        Assert.Equal(VerificationState.Untested, fidelity.P5RootPersist);
+        Assert.Equal(VerificationState.Pass, fidelity.P5RootPersist);
         Assert.Equal(VerificationState.Untested, fidelity.P6ArmApp);
     }
 
     /// <summary>
     /// 回归测试：非默认取值必须被真实解析出来。
-    /// 样例文件当前六项全为 untested，仅靠它无法暴露「模型字段名与契约不符导致静默回落默认值」
-    /// 这类缺陷——默认值恰好等于 untested 时错误不可见，故此处用刻意构造的混合取值验证。
+    /// 样例文件当前的取值组合（pass 与 untested 混合）恰好等于解析器的默认值 untested 时，
+    /// 单靠它无法暴露「模型字段名与契约不符导致静默回落默认值」这类缺陷，
+    /// 故此处用刻意构造的、覆盖三种取值的探针 JSON 验证。
     /// </summary>
     [Fact]
     public void NonDefaultFidelityValuesAreParsedRatherThanFallingBackToDefault()
@@ -211,13 +234,17 @@ public class FidelitySemanticsTests
         Assert.Contains("\"P1_root\":\"pass\"", text, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// 验证样例登记的是已验证可用的原生 QMP 输入通道，
+    /// 不得回退为「均不可用」而与实测证据相抵触。
+    /// </summary>
     [Fact]
-    public void InputChannelDeclaresNoWorkingChannelYet()
+    public void SampleDeclaresTheVerifiedNativeInputChannel()
     {
         var inputChannel = JsonNode.Parse(SpecTestHost.ImageJson())!
             ["verified"]!["inputChannel"]!.GetValue<string>();
 
-        Assert.Equal("none", inputChannel);
+        Assert.Equal("native", inputChannel);
     }
 
     [Fact]

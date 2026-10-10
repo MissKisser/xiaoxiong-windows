@@ -87,6 +87,10 @@ public static class AppComposition
         var audit = new AuditLog(Path.Combine(logRoot, "audit.log"));
         var terms = new TerminologyCatalog(loader.LoadTerminology());
 
+        var initrdCustomizer = new InitrdCustomizerService();
+        var bootAssetExtractor = new BootAssetExtractorService(imagesRoot, initrdCustomizer);
+        var baseImageImporter = new BaseImageImportService(imagesRoot);
+
         return new AppServices(
             repository,
             manager,
@@ -97,7 +101,10 @@ public static class AppComposition
             loader.LoadDesignTokens(),
             validator,
             identityFactory,
-            outcome.RejectedManifests);
+            outcome.RejectedManifests,
+            bootAssetExtractor,
+            initrdCustomizer,
+            baseImageImporter);
     }
 
     /// <summary>
@@ -197,6 +204,9 @@ public sealed record ManifestRejection(string ManifestName, string Reason);
 /// <param name="Validator">实例配置与镜像清单的 Schema 校验器。</param>
 /// <param name="IdentityFactory">实例设备标识工厂，为每个实例发放独立且不复用的标识。</param>
 /// <param name="RejectedManifests">被拒绝的镜像清单及原因，无拒绝项时为空集合。</param>
+/// <param name="BootAssetExtractor">引导资产提取服务。</param>
+/// <param name="InitrdCustomizer">initrd 定制服务。</param>
+/// <param name="Importer">base 镜像导入服务。</param>
 public sealed record AppServices(
     IInstanceRepository Repository,
     InstanceManager Manager,
@@ -207,4 +217,7 @@ public sealed record AppServices(
     DesignTokens Tokens,
     SpecValidator Validator,
     IDeviceIdentityFactory IdentityFactory,
-    IReadOnlyList<ManifestRejection> RejectedManifests);
+    IReadOnlyList<ManifestRejection> RejectedManifests,
+    BootAssetExtractorService BootAssetExtractor,
+    InitrdCustomizerService InitrdCustomizer,
+    BaseImageImportService Importer);
