@@ -30,9 +30,54 @@ public sealed class InstanceSpec
     [JsonPropertyName("deviceIdentity")]
     public DeviceIdentity? DeviceIdentity { get; set; }
 
+    /// <summary>
+    /// 显示设置，缺省时由平台按镜像的显示能力选型。
+    /// 分辨率、像素密度与方向在实例运行期间不可改，改动后需下次启动生效。
+    /// </summary>
+    [JsonPropertyName("display")]
+    public DisplaySpec? Display { get; set; }
+
     /// <summary>平台特有字段逃生舱，通用契约不解析其内部结构，未映射的键原样保留。</summary>
     [JsonPropertyName("platformConfig")]
     public PlatformConfig? PlatformConfig { get; set; }
+}
+
+/// <summary>
+/// 实例显示设置，宽高必填、像素密度与屏幕方向可选。
+/// 契约未把本对象封闭，各端可继续追加专有显示字段，未显式声明的键原样保留；
+/// 未设置的可选字段写出时不被补成显式 null，避免把缺省状态固化成契约内容。
+/// </summary>
+public sealed class DisplaySpec
+{
+    /// <summary>画面宽度，单位像素。</summary>
+    [JsonPropertyName("width")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Width { get; set; }
+
+    /// <summary>画面高度，单位像素。</summary>
+    [JsonPropertyName("height")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Height { get; set; }
+
+    /// <summary>像素密度，单位 dpi。为 null 时由平台按镜像的显示能力选型。</summary>
+    [JsonPropertyName("dpi")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? Dpi { get; set; }
+
+    /// <summary>屏幕方向。为 null 时跟随宿主系统方向。</summary>
+    [JsonPropertyName("orientation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Orientation { get; set; }
+
+    /// <summary>未映射到强类型属性的显示字段，反序列化时原样保留，序列化时原样写出。</summary>
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+
+    /// <summary>
+    /// 判断是否已按横屏呈现。为 null 表示跟随宿主系统方向，两端不得各自推断。
+    /// </summary>
+    /// <returns>屏幕方向显式为横屏时为 true。</returns>
+    public bool IsLandscape() => string.Equals(Orientation, "landscape", StringComparison.Ordinal);
 }
 
 /// <summary>

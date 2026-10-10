@@ -281,11 +281,104 @@ public class ModelRoundTripTests
         Assert.Equal("root=/dev/ram0 quiet nomodeset", spec.PlatformConfig.KernelAppend);
     }
 
+    [Fact]
+    public void WindowsFixtureContainsDisplaySettings()
+    {
+        var spec = SpecTestHost.Loader.ParseInstance(SpecTestHost.WindowsInstanceJson());
+
+        Assert.NotNull(spec.Display);
+        Assert.Equal(1920, spec.Display!.Width);
+        Assert.Equal(1080, spec.Display.Height);
+        Assert.Equal(240, spec.Display.Dpi);
+        Assert.Equal("landscape", spec.Display.Orientation);
+        Assert.True(spec.Display.IsLandscape());
+    }
+
+    [Fact]
+    public void DisplaySurvivesRoundTrip()
+    {
+        var first = SpecTestHost.Loader.ParseInstance(SpecTestHost.WindowsInstanceJson());
+
+        var reserialized = JsonSerializer.Serialize(first, SpecLoader.SerializerOptions);
+        var second = SpecTestHost.Loader.ParseInstance(reserialized);
+
+        Assert.NotNull(second.Display);
+        Assert.Equal(first.Display!.Width, second.Display!.Width);
+        Assert.Equal(first.Display.Height, second.Display.Height);
+        Assert.Equal(first.Display.Dpi, second.Display.Dpi);
+        Assert.Equal(first.Display.Orientation, second.Display.Orientation);
+        Assert.Contains("\"dpi\": 240", reserialized, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 契约新增可选字段后，未声明该字段的存量实例文件必须解析为缺省，
+    /// 且再次写出时不得凭空补出该键，否则旧版本实例文件会被静默改写。
+    /// </summary>
+    [Fact]
+    public void InstanceFileWithoutDisplayParsesToNullAndIsNotWrittenBack()
+    {
+        var spec = SpecTestHost.Loader.ParseInstance(SpecTestHost.AndroidInstanceJson());
+
+        Assert.Null(spec.Display);
+
+        var reserialized = JsonSerializer.Serialize(spec, SpecLoader.SerializerOptions);
+
+        Assert.DoesNotContain("\"display\"", reserialized, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// 显示设置未封闭，两端各自的专有显示字段必须继续放得下；
+    /// 未映射的键既不能在解析时丢掉，也不能在写出时变形。
+    /// </summary>
+    [Fact]
+    public void DisplayKeepsUnmappedFieldsAsEscapeHatch()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["display"]!["colorMode"] = "hdr";
+
+        var spec = SpecTestHost.Loader.ParseInstance(sample.ToJsonString());
+
+        Assert.NotNull(spec.Display!.ExtensionData);
+        Assert.True(spec.Display.ExtensionData!.ContainsKey("colorMode"));
+
+        var reserialized = JsonSerializer.Serialize(spec, SpecLoader.SerializerOptions);
+
+        Assert.Contains("\"colorMode\": \"hdr\"", reserialized, StringComparison.Ordinal);
+        Assert.True(
+            SpecTestHost.Validator.ValidateInstance(reserialized).IsValid,
+            "显示设置的逃生舱字段必须能原样通过契约校验");
+    }
+
+    /// <summary>
+    /// 显示设置的可选字段缺省时不得被补成显式 null，
+    /// 否则会把「由平台按镜像的显示能力选型」这一缺省状态固化成契约内容。
+    /// </summary>
+    [Fact]
+    public void DisplayWithoutOptionalFieldsIsNotWrittenBack()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.AndroidInstanceJson())!.AsObject();
+        sample["display"] = new JsonObject
+        {
+            ["width"] = 1280,
+            ["height"] = 720
+        };
+
+        var spec = SpecTestHost.Loader.ParseInstance(sample.ToJsonString());
+
+        Assert.Null(spec.Display!.Dpi);
+        Assert.Null(spec.Display.Orientation);
+
+        var reserialized = JsonSerializer.Serialize(spec, SpecLoader.SerializerOptions);
+
+        Assert.DoesNotContain("dpi", reserialized, StringComparison.Ordinal);
+        Assert.DoesNotContain("orientation", reserialized, StringComparison.Ordinal);
+        Assert.True(SpecTestHost.Validator.ValidateInstance(reserialized).IsValid);
+    }
+
     /// <summary>
     /// 递归收集 JSON 文档中全部叶子节点路径与取值，用于比对往返前后的字段集合。
     /// </summary>
-    private static List<string> CollectLeafPaths(JsonNode? node, string prefix = "")
-    {
+    private static List<string> CollectLeafPaths(JsonNode? node, string prefix = "")    {
         var paths = new List<string>();
 
         switch (node)

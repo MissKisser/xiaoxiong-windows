@@ -109,7 +109,7 @@ public interface ISchemaEvaluator
 }
 
 /// <summary>
-/// 实例配置、镜像清单与快照元数据的 Schema 校验入口，
+/// 实例配置、镜像清单、快照元数据、投屏会话、传输任务、模块记录与应用记录的 Schema 校验入口，
 /// 并对没有配套 Schema 文件的版本契约与性能基线做结构校验。
 /// 校验结果为结构化对象，便于测试与上层逐条展示。
 /// </summary>
@@ -173,6 +173,38 @@ public sealed class SpecValidator
     /// <returns>结构化校验结果。</returns>
     public ValidationResult ValidateSnapshot(string json) =>
         ValidateAgainst(SpecLoader.SnapshotSchemaFileName, json);
+
+    /// <summary>
+    /// 校验投屏会话 JSON。
+    /// </summary>
+    /// <param name="json">投屏会话 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateProjection(string json) =>
+        ValidateAgainst(SpecLoader.ProjectionSchemaFileName, json);
+
+    /// <summary>
+    /// 校验传输任务 JSON。
+    /// </summary>
+    /// <param name="json">传输任务 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateFileTransfer(string json) =>
+        ValidateAgainst(SpecLoader.FileTransferSchemaFileName, json);
+
+    /// <summary>
+    /// 校验模块清单与安装状态 JSON。
+    /// </summary>
+    /// <param name="json">模块记录 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateModule(string json) =>
+        ValidateAgainst(SpecLoader.ModuleSchemaFileName, json);
+
+    /// <summary>
+    /// 校验应用记录 JSON。
+    /// </summary>
+    /// <param name="json">应用记录 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateApplication(string json) =>
+        ValidateAgainst(SpecLoader.ApplicationSchemaFileName, json);
 
     /// <summary>
     /// 校验版本契约 JSON。版本契约未配套 Schema 文件，
@@ -342,21 +374,50 @@ public sealed class SpecValidator
         if (result.IsValid)
         {
             // 解析一次以确认样例可被强类型模型接受，解析失败会抛出规格类异常。
-            if (schemaFileName == SpecLoader.ImageSchemaFileName)
-            {
-                _loader.ParseImage(json);
-            }
-            else if (schemaFileName == SpecLoader.SnapshotSchemaFileName)
-            {
-                _loader.ParseSnapshot(json);
-            }
-            else
-            {
-                _loader.ParseInstance(json);
-            }
+            ParseFixture(schemaFileName, json);
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 按样例所属契约把文本解析为对应的强类型模型。
+    /// </summary>
+    /// <param name="schemaFileName">该样例对应的 Schema 文件名。</param>
+    /// <param name="json">样例 JSON 文本。</param>
+    /// <exception cref="XBearException">样例无法被强类型模型接受时抛出。</exception>
+    private void ParseFixture(string schemaFileName, string json)
+    {
+        switch (schemaFileName)
+        {
+            case SpecLoader.ImageSchemaFileName:
+                _loader.ParseImage(json);
+                break;
+
+            case SpecLoader.SnapshotSchemaFileName:
+                _loader.ParseSnapshot(json);
+                break;
+
+            case SpecLoader.ProjectionSchemaFileName:
+                _loader.ParseProjection(json);
+                break;
+
+            case SpecLoader.FileTransferSchemaFileName:
+                _loader.ParseFileTransfer(json);
+                break;
+
+            case SpecLoader.ModuleSchemaFileName:
+                _loader.ParseModule(json);
+                break;
+
+            case SpecLoader.ApplicationSchemaFileName:
+                _loader.ParseApplication(json);
+                break;
+
+            default:
+                _loader.ParseInstance(json);
+                break;
+        }
     }
 
     /// <summary>
@@ -384,10 +445,26 @@ public sealed class SpecValidator
             return SpecLoader.ImageSchemaFileName;
         }
 
-        return fixtureFileName.StartsWith("snapshot", StringComparison.Ordinal)
-            ? SpecLoader.SnapshotSchemaFileName
-            : SpecLoader.InstanceSchemaFileName;
+        foreach (var (prefix, schemaFileName) in FixturePrefixSchemaFiles)
+        {
+            if (fixtureFileName.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                return schemaFileName;
+            }
+        }
+
+        return SpecLoader.InstanceSchemaFileName;
     }
+
+    /// <summary>样例文件名前缀与其所属契约 Schema 的对应关系。</summary>
+    private static readonly (string Prefix, string SchemaFileName)[] FixturePrefixSchemaFiles =
+    {
+        ("snapshot", SpecLoader.SnapshotSchemaFileName),
+        ("projection", SpecLoader.ProjectionSchemaFileName),
+        ("filetransfer", SpecLoader.FileTransferSchemaFileName),
+        ("module", SpecLoader.ModuleSchemaFileName),
+        ("application", SpecLoader.ApplicationSchemaFileName),
+    };
 
     private static void RequireText(
         List<ValidationError> errors,

@@ -20,7 +20,15 @@ public class SchemaCompatibilityTests
                      SpecLoader.AndroidInstanceFixtureName,
                      SpecLoader.ImageFixtureName,
                      SpecLoader.SnapshotMinimalFixtureName,
-                     SpecLoader.SnapshotFullFixtureName
+                     SpecLoader.SnapshotFullFixtureName,
+                     SpecLoader.ProjectionMinimalFixtureName,
+                     SpecLoader.ProjectionFullFixtureName,
+                     SpecLoader.FileTransferMinimalFixtureName,
+                     SpecLoader.FileTransferFullFixtureName,
+                     SpecLoader.ModuleMinimalFixtureName,
+                     SpecLoader.ModuleFullFixtureName,
+                     SpecLoader.ApplicationMinimalFixtureName,
+                     SpecLoader.ApplicationFullFixtureName
                  })
         {
             var result = SpecTestHost.Validator.ValidateFixture(fixture);
@@ -274,6 +282,80 @@ public class SchemaCompatibilityTests
         Assert.Equal(minimal.SchemaVersion, full.SchemaVersion);
         Assert.Equal(minimal.InstanceRef, full.InstanceRef);
     }
+
+    /// <summary>新契约样例与其所属 Schema 的对应关系，防止样例被挂到错误的契约上校验。</summary>
+    public static TheoryData<string, string> NewContractFixtureSchemaMapping =>
+        new()
+        {
+            { SpecLoader.ProjectionMinimalFixtureName, SpecLoader.ProjectionSchemaFileName },
+            { SpecLoader.ProjectionFullFixtureName, SpecLoader.ProjectionSchemaFileName },
+            { SpecLoader.FileTransferMinimalFixtureName, SpecLoader.FileTransferSchemaFileName },
+            { SpecLoader.FileTransferFullFixtureName, SpecLoader.FileTransferSchemaFileName },
+            { SpecLoader.ModuleMinimalFixtureName, SpecLoader.ModuleSchemaFileName },
+            { SpecLoader.ModuleFullFixtureName, SpecLoader.ModuleSchemaFileName },
+            { SpecLoader.ApplicationMinimalFixtureName, SpecLoader.ApplicationSchemaFileName },
+            { SpecLoader.ApplicationFullFixtureName, SpecLoader.ApplicationSchemaFileName }
+        };
+
+    [Theory]
+    [MemberData(nameof(NewContractFixtureSchemaMapping))]
+    public void NewContractFixtureIsValidatedAgainstItsOwnSchema(string fixtureFileName, string schemaFileName)
+    {
+        var result = SpecTestHost.Validator.ValidateFixture(fixtureFileName);
+
+        Assert.True(result.IsValid, $"{fixtureFileName}：{result.DescribeErrors()}");
+        Assert.Equal(schemaFileName, result.SchemaFileName);
+    }
+
+    /// <summary>实例契约新增可选字段后，两端样例不必同步升到同一版本。</summary>
+    [Fact]
+    public void InstanceSampleWithoutDisplayStillPassesSchema()
+    {
+        var result = SpecTestHost.Validator.ValidateInstance(SpecTestHost.AndroidInstanceJson());
+
+        Assert.True(result.IsValid, result.DescribeErrors());
+        Assert.Null(SpecTestHost.Loader.ParseInstance(SpecTestHost.AndroidInstanceJson()).Display);
+    }
+
+    [Fact]
+    public void DisplayRequiresBothWidthAndHeight()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.AndroidInstanceJson())!.AsObject();
+        sample["display"] = new JsonObject
+        {
+            ["width"] = 1920
+        };
+
+        var result = SpecTestHost.Validator.ValidateInstance(sample.ToJsonString());
+
+        Assert.False(result.IsValid, "显示设置缺少必填的高度时不得通过校验");
+    }
+
+    [Theory]
+    [InlineData("landscape")]
+    [InlineData("portrait")]
+    [InlineData("auto")]
+    public void SchemaAcceptsEveryDeclaredScreenOrientation(string orientation)
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["display"]!["orientation"] = orientation;
+
+        var result = SpecTestHost.Validator.ValidateInstance(sample.ToJsonString());
+
+        Assert.True(result.IsValid, result.DescribeErrors());
+    }
+
+    [Fact]
+    public void UndeclaredScreenOrientationIsRejected()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.WindowsInstanceJson())!.AsObject();
+        sample["display"]!["orientation"] = "upside-down";
+
+        var result = SpecTestHost.Validator.ValidateInstance(sample.ToJsonString());
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Path == "/display/orientation");
+    }
 }
 
 /// <summary>
@@ -311,13 +393,33 @@ public class SemanticConsistencyTests
         Assert.All(parts, part => Assert.True(int.TryParse(part, out _), $"版本片段 {part} 非数字"));
     }
 
+    /// <summary>实例契约新增可选字段后，两端样例不必同步升到同一版本。</summary>
     [Fact]
-    public void BothSamplesShareTheSameSchemaVersion()
+    public void NewerInstanceSampleIsNotBehindTheOlderOne()
     {
         var windows = SpecTestHost.Loader.ParseInstance(SpecTestHost.WindowsInstanceJson());
         var android = SpecTestHost.Loader.ParseInstance(SpecTestHost.AndroidInstanceJson());
 
-        Assert.Equal(windows.SchemaVersion, android.SchemaVersion);
+        // 规格层向后兼容地新增可选字段时，两端样例允许停在不同版本：
+        // 契约只要求两端都能解析上一版本，不要求样例同步升版。
+        Assert.True(
+            IsNotOlder(windows.SchemaVersion, android.SchemaVersion),
+            $"带新增可选字段的样例版本 {windows.SchemaVersion} 不得落后于 {android.SchemaVersion}");
+    }
+
+    /// <summary>
+    /// 判断候选版本是否不低于基线版本，逐段比较三段式版本号。
+    /// </summary>
+    private static bool IsNotOlder(string candidate, string baseline)
+    {
+        Assert.True(SemanticVersion.TryParse(candidate, out var candidateVersion), candidate);
+        Assert.True(SemanticVersion.TryParse(baseline, out var baselineVersion), baseline);
+
+        return candidateVersion.Major > baselineVersion.Major ||
+               (candidateVersion.Major == baselineVersion.Major &&
+                (candidateVersion.Minor > baselineVersion.Minor ||
+                 (candidateVersion.Minor == baselineVersion.Minor &&
+                  candidateVersion.Patch >= baselineVersion.Patch)));
     }
 
     [Theory]

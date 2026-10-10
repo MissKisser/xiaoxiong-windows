@@ -16,7 +16,47 @@ public class ContractSelfCheckTests
             SpecLoader.InstanceSchemaFileName,
             SpecLoader.ImageSchemaFileName,
             SpecLoader.SnapshotSchemaFileName,
-            SpecLoader.TerminologySchemaFileName
+            SpecLoader.TerminologySchemaFileName,
+            SpecLoader.ProjectionSchemaFileName,
+            SpecLoader.FileTransferSchemaFileName,
+            SpecLoader.ModuleSchemaFileName,
+            SpecLoader.ApplicationSchemaFileName
+        };
+
+    /// <summary>
+    /// W-M4 新增的投屏、传输、模块与应用四份契约的 Schema 文件名。
+    /// </summary>
+    public static TheoryData<string> NewContractSchemaFileNames =>
+        new()
+        {
+            SpecLoader.ProjectionSchemaFileName,
+            SpecLoader.FileTransferSchemaFileName,
+            SpecLoader.ModuleSchemaFileName,
+            SpecLoader.ApplicationSchemaFileName
+        };
+
+    /// <summary>四份新契约的八份样例文件名。</summary>
+    public static TheoryData<string> NewContractFixtureNames =>
+        new()
+        {
+            SpecLoader.ProjectionMinimalFixtureName,
+            SpecLoader.ProjectionFullFixtureName,
+            SpecLoader.FileTransferMinimalFixtureName,
+            SpecLoader.FileTransferFullFixtureName,
+            SpecLoader.ModuleMinimalFixtureName,
+            SpecLoader.ModuleFullFixtureName,
+            SpecLoader.ApplicationMinimalFixtureName,
+            SpecLoader.ApplicationFullFixtureName
+        };
+
+    /// <summary>四份新契约的最小样例文件名，只含必填字段。</summary>
+    public static TheoryData<string> NewContractMinimalFixtureNames =>
+        new()
+        {
+            SpecLoader.ProjectionMinimalFixtureName,
+            SpecLoader.FileTransferMinimalFixtureName,
+            SpecLoader.ModuleMinimalFixtureName,
+            SpecLoader.ApplicationMinimalFixtureName
         };
 
     /// <summary>术语条目必须齐备的字段。</summary>
@@ -236,6 +276,155 @@ public class ContractSelfCheckTests
 
         Assert.True(SemanticVersion.TryParse(spec.SchemaVersion, out _), spec.SchemaVersion);
     }
+
+    /// <summary>
+    /// 四份新契约的顶层必须封闭：任一端擅自写入未声明字段时，
+    /// 另一端会静默吞掉该字段，跨端事实就此丢失。
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NewContractSchemaFileNames))]
+    public void NewContractSchemaRejectsUnknownTopLevelFields(string schemaFileName)
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(schemaFileName))!
+            .AsObject();
+
+        Assert.False(schema["additionalProperties"]!.GetValue<bool>(), $"{schemaFileName} 未封闭顶层");
+    }
+
+    /// <summary>
+    /// 契约新声明的字段一旦漏绑强类型属性，另一端写入的取值就会被静默丢弃，
+    /// 解析后回落到缺省值而无任何告警。
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NewContractSchemaFileNames))]
+    public void NewContractModelBindsEveryDeclaredField(string schemaFileName)
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(schemaFileName))!
+            .AsObject();
+        var modelType = NewContractModelType(schemaFileName);
+
+        foreach (var declared in schema["properties"]!.AsObject())
+        {
+            var property = modelType.GetProperty(PropertyName(declared.Key));
+
+            Assert.True(
+                property is not null,
+                $"{schemaFileName} 声明了 {declared.Key} 但 {modelType.Name} 未覆盖");
+
+            var attribute = property!.GetCustomAttributes(typeof(JsonPropertyNameAttribute), false)
+                .Cast<JsonPropertyNameAttribute>()
+                .Single();
+
+            Assert.Equal(declared.Key, attribute.Name);
+        }
+    }
+
+    /// <summary>
+    /// 必填字段漏绑比可选字段漏绑更隐蔽：解析照样成功，缺的是契约明文要求的那个值。
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NewContractSchemaFileNames))]
+    public void NewContractModelBindsEveryRequiredField(string schemaFileName)
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(schemaFileName))!
+            .AsObject();
+        var modelType = NewContractModelType(schemaFileName);
+
+        foreach (var required in schema["required"]!.AsArray())
+        {
+            var fieldName = required!.GetValue<string>();
+
+            Assert.True(
+                modelType.GetProperty(PropertyName(fieldName)) is not null,
+                $"{schemaFileName} 把 {fieldName} 列为必填但 {modelType.Name} 未覆盖");
+        }
+    }
+
+    /// <summary>
+    /// 应用契约的操作记录是文件内的嵌套契约，与应用记录共用同一份文件，
+    /// 拆成两个文件会形成双向引用，因此嵌套部分同样要求模型逐字段绑定。
+    /// </summary>
+    [Fact]
+    public void ApplicationOperationModelBindsEveryDeclaredField()
+    {
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.ApplicationSchemaFileName))!
+            .AsObject();
+        var operation = schema["$defs"]!["operation"]!.AsObject();
+
+        foreach (var declared in operation["properties"]!.AsObject())
+        {
+            var property = typeof(ApplicationOperation).GetProperty(PropertyName(declared.Key));
+
+            Assert.True(
+                property is not null,
+                $"操作契约声明了 {declared.Key} 但 ApplicationOperation 未覆盖");
+
+            var attribute = property!.GetCustomAttributes(typeof(JsonPropertyNameAttribute), false)
+                .Cast<JsonPropertyNameAttribute>()
+                .Single();
+
+            Assert.Equal(declared.Key, attribute.Name);
+        }
+
+        foreach (var required in operation["required"]!.AsArray())
+        {
+            var fieldName = required!.GetValue<string>();
+
+            Assert.True(
+                typeof(ApplicationOperation).GetProperty(PropertyName(fieldName)) is not null,
+                $"操作契约把 {fieldName} 列为必填但 ApplicationOperation 未覆盖");
+        }
+    }
+
+    /// <summary>
+    /// 八份新样例必须既能通过各自契约的 Schema 校验，也能被强类型模型接受，
+    /// 后者才是两端真正能读懂对方的保证。
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NewContractFixtureNames))]
+    public void NewContractFixturePassesSchema(string fixtureFileName)
+    {
+        var result = SpecTestHost.Validator.ValidateFixture(fixtureFileName);
+
+        Assert.True(result.IsValid, $"{fixtureFileName}：{result.DescribeErrors()}");
+    }
+
+    /// <summary>
+    /// 最小样例只列必填字段。一旦把可选字段也写进去，
+    /// 「最小样例」就不再代表另一端可能收到的最简输入。
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(NewContractMinimalFixtureNames))]
+    public void MinimalNewContractFixtureDeclaresOnlyRequiredFields(string fixtureFileName)
+    {
+        var sample = JsonNode.Parse(SpecTestHost.Loader.ReadFixtureText(fixtureFileName))!.AsObject();
+        var result = SpecTestHost.Validator.ValidateFixture(fixtureFileName);
+        var schema = JsonNode
+            .Parse(SpecTestHost.Loader.ReadSchemaText(result.SchemaFileName))!
+            .AsObject();
+        var required = schema["required"]!.AsArray().Select(node => node!.GetValue<string>()).ToArray();
+
+        foreach (var fieldName in required)
+        {
+            Assert.True(sample.ContainsKey(fieldName), $"最小样例 {fixtureFileName} 缺少必填字段 {fieldName}");
+        }
+
+        Assert.Equal(required.Length, sample.Count);
+    }
+
+    /// <summary>取新契约对应的强类型模型类型。</summary>
+    private static Type NewContractModelType(string schemaFileName) => schemaFileName switch
+    {
+        SpecLoader.ProjectionSchemaFileName => typeof(ProjectionSpec),
+        SpecLoader.FileTransferSchemaFileName => typeof(FileTransferSpec),
+        SpecLoader.ModuleSchemaFileName => typeof(ModuleSpec),
+        SpecLoader.ApplicationSchemaFileName => typeof(ApplicationSpec),
+        _ => throw new InvalidOperationException($"未登记的契约 {schemaFileName}")
+    };
 
     [Fact]
     public void VersionFileExposesBothVersionSequences()

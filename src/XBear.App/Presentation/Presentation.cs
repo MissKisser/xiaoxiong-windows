@@ -62,7 +62,7 @@ public static class InputChannelMapper
                 IsUnavailable: false),
             InputChannelKind.Projection => new InputChannelPresentation(
                 projectionInput,
-                $"原生通路不可用，已降级为{terms.Projection}并注入{terms.InputChannel}。",
+                $"原生通路不可用，已降级为{terms.Projection}，{terms.InputChannel}随之改由{terms.ProjectionSession}承载。",
                 IsUnavailable: false),
             InputChannelKind.Unavailable => new InputChannelPresentation(
                 $"{terms.InputChannel}不可用",
@@ -121,7 +121,7 @@ public static class FidelityMapper
         {
             Item("P1 可获取 Root 权限", fidelity.P1Root),
             Item("P2 系统分区可写", fidelity.P2SystemWrite),
-            Item("P3 可刷模块", fidelity.P3ModuleFlash),
+            Item("P3 可安装模块", fidelity.P3ModuleFlash),
             Item("P4 可刷镜像", fidelity.P4ImageSwap),
             Item("P5 Root 权限持久", fidelity.P5RootPersist),
             Item("P6 可运行 ARM 应用", fidelity.P6ArmApp)

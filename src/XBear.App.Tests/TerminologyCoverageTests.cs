@@ -13,8 +13,8 @@ namespace XBear.App.Tests;
 /// </summary>
 public class TerminologyCatalogTests
 {
-    /// <summary>共享术语表的条目数，与 v1.1.0 契约一致。</summary>
-    private const int ContractTermCount = 16;
+    /// <summary>共享术语表的条目数，与 v1.2.0 契约一致。</summary>
+    private const int ContractTermCount = 36;
 
     private static TerminologyCatalog Create() =>
         new(XBeeSpec.TestSpec().LoadTerminology());
@@ -78,6 +78,26 @@ public class TerminologyCatalogTests
         Assert.Equal(document.Require(TerminologyCatalog.ProjectionTermId).Zh, catalog.Projection);
         Assert.Equal(document.Require(TerminologyCatalog.FileTransferTermId).Zh, catalog.FileTransfer);
         Assert.Equal(document.Require(TerminologyCatalog.DiagnosticsTermId).Zh, catalog.Diagnostics);
+        Assert.Equal(document.Require(TerminologyCatalog.ResolutionTermId).Zh, catalog.Resolution);
+        Assert.Equal(document.Require(TerminologyCatalog.DensityTermId).Zh, catalog.Density);
+        Assert.Equal(document.Require(TerminologyCatalog.OrientationTermId).Zh, catalog.Orientation);
+        Assert.Equal(document.Require(TerminologyCatalog.ProjectionSessionTermId).Zh, catalog.ProjectionSession);
+        Assert.Equal(document.Require(TerminologyCatalog.FrameRateTermId).Zh, catalog.FrameRate);
+        Assert.Equal(document.Require(TerminologyCatalog.PointerCoordinateDomainTermId).Zh, catalog.PointerCoordinateDomain);
+        Assert.Equal(document.Require(TerminologyCatalog.InputDeviceKindTermId).Zh, catalog.InputDeviceKind);
+        Assert.Equal(document.Require(TerminologyCatalog.ModuleTermId).Zh, catalog.Module);
+        Assert.Equal(document.Require(TerminologyCatalog.ModuleInstallTermId).Zh, catalog.ModuleInstall);
+        Assert.Equal(document.Require(TerminologyCatalog.ModuleUninstallTermId).Zh, catalog.ModuleUninstall);
+        Assert.Equal(document.Require(TerminologyCatalog.ModuleManifestTermId).Zh, catalog.ModuleManifest);
+        Assert.Equal(document.Require(TerminologyCatalog.StageScriptTermId).Zh, catalog.StageScript);
+        Assert.Equal(document.Require(TerminologyCatalog.SystemOverlayTermId).Zh, catalog.SystemOverlay);
+        Assert.Equal(document.Require(TerminologyCatalog.DisableMarkerTermId).Zh, catalog.DisableMarker);
+        Assert.Equal(document.Require(TerminologyCatalog.TransferTaskTermId).Zh, catalog.TransferTask);
+        Assert.Equal(document.Require(TerminologyCatalog.ConflictPolicyTermId).Zh, catalog.ConflictPolicy);
+        Assert.Equal(document.Require(TerminologyCatalog.ApplicationTermId).Zh, catalog.Application);
+        Assert.Equal(document.Require(TerminologyCatalog.AppLaunchTermId).Zh, catalog.AppLaunch);
+        Assert.Equal(document.Require(TerminologyCatalog.ApkFileTermId).Zh, catalog.ApkFile);
+        Assert.Equal(document.Require(TerminologyCatalog.InstallStateTermId).Zh, catalog.InstallState);
     }
 }
 

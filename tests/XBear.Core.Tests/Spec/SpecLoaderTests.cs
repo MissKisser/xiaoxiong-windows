@@ -152,6 +152,131 @@ public class SpecLoaderTests
 
         Assert.Equal(ErrorCategory.Spec, ex.Category);
     }
+
+    /// <summary>新契约的样例文件名与其强类型模型加载入口的对应关系。</summary>
+    public static TheoryData<string> NewContractFixtureNames =>
+        new()
+        {
+            SpecLoader.ProjectionMinimalFixtureName,
+            SpecLoader.ProjectionFullFixtureName,
+            SpecLoader.FileTransferMinimalFixtureName,
+            SpecLoader.FileTransferFullFixtureName,
+            SpecLoader.ModuleMinimalFixtureName,
+            SpecLoader.ModuleFullFixtureName,
+            SpecLoader.ApplicationMinimalFixtureName,
+            SpecLoader.ApplicationFullFixtureName
+        };
+
+    [Theory]
+    [MemberData(nameof(NewContractFixtureNames))]
+    public void NewContractFixturesAreLocatable(string fixtureFileName)
+    {
+        var path = SpecTestHost.Loader.FixturePath(fixtureFileName);
+
+        Assert.True(File.Exists(path), $"缺少样例文件：{path}");
+    }
+
+    [Fact]
+    public void ProjectionFixturesLoadIntoModel()
+    {
+        var minimal = SpecTestHost.Loader.LoadProjectionFixture(SpecLoader.ProjectionMinimalFixtureName);
+        var full = SpecTestHost.Loader.LoadProjectionFixture(SpecLoader.ProjectionFullFixtureName);
+
+        Assert.Equal(ProjectionState.Pending, minimal.State);
+        Assert.Equal(ProjectionState.Active, full.State);
+        Assert.False(string.IsNullOrWhiteSpace(minimal.InstanceRef));
+    }
+
+    [Fact]
+    public void FileTransferFixturesLoadIntoModel()
+    {
+        var minimal = SpecTestHost.Loader.LoadFileTransferFixture(SpecLoader.FileTransferMinimalFixtureName);
+        var full = SpecTestHost.Loader.LoadFileTransferFixture(SpecLoader.FileTransferFullFixtureName);
+
+        Assert.Equal(FileTransferState.Queued, minimal.State);
+        Assert.Equal(ConflictPolicy.Overwrite, minimal.Overwrite);
+        Assert.Equal(FileTransferState.Running, full.State);
+        Assert.Equal(ConflictPolicy.Rename, full.Overwrite);
+    }
+
+    [Fact]
+    public void ModuleFixturesLoadIntoModel()
+    {
+        var minimal = SpecTestHost.Loader.LoadModuleFixture(SpecLoader.ModuleMinimalFixtureName);
+        var full = SpecTestHost.Loader.LoadModuleFixture(SpecLoader.ModuleFullFixtureName);
+
+        Assert.Equal(ModuleInstallState.Installed, minimal.Install.State);
+        Assert.Equal(ModuleInstallState.Enabled, full.Install.State);
+        Assert.Equal("zygisk-next.zip", minimal.Install.SourceZip);
+    }
+
+    [Fact]
+    public void ApplicationFixturesLoadIntoModel()
+    {
+        var minimal = SpecTestHost.Loader.LoadApplicationFixture(SpecLoader.ApplicationMinimalFixtureName);
+        var full = SpecTestHost.Loader.LoadApplicationFixture(SpecLoader.ApplicationFullFixtureName);
+
+        Assert.Equal(ApplicationInstallState.NotInstalled, minimal.InstallState);
+        Assert.Equal(ApplicationInstallState.Installed, full.InstallState);
+        Assert.Null(minimal.LastOperation);
+        Assert.NotNull(full.LastOperation);
+    }
+
+    /// <summary>新契约的 Schema 文件名与其解析入口的对应关系。</summary>
+    public static TheoryData<string> NewContractSchemaFileNames =>
+        new()
+        {
+            SpecLoader.ProjectionSchemaFileName,
+            SpecLoader.FileTransferSchemaFileName,
+            SpecLoader.ModuleSchemaFileName,
+            SpecLoader.ApplicationSchemaFileName
+        };
+
+    [Theory]
+    [MemberData(nameof(NewContractSchemaFileNames))]
+    public void NewContractSchemasAreLocatable(string schemaFileName)
+    {
+        var path = SpecTestHost.Loader.SchemaPath(schemaFileName);
+
+        Assert.True(File.Exists(path), $"缺少契约文件：{path}");
+    }
+
+    [Theory]
+    [MemberData(nameof(NewContractSchemaFileNames))]
+    public void InvalidNewContractJsonThrowsSpecException(string schemaFileName)
+    {
+        var ex = Assert.Throws<XBearException>(() =>
+        {
+            switch (schemaFileName)
+            {
+                case SpecLoader.ProjectionSchemaFileName:
+                    SpecTestHost.Loader.ParseProjection("{ 不是 JSON");
+                    break;
+                case SpecLoader.FileTransferSchemaFileName:
+                    SpecTestHost.Loader.ParseFileTransfer("{ 不是 JSON");
+                    break;
+                case SpecLoader.ModuleSchemaFileName:
+                    SpecTestHost.Loader.ParseModule("{ 不是 JSON");
+                    break;
+                default:
+                    SpecTestHost.Loader.ParseApplication("{ 不是 JSON");
+                    break;
+            }
+        });
+
+        Assert.Equal(ErrorCategory.Spec, ex.Category);
+    }
+
+    [Fact]
+    public void NewContractFilesLoadFromAbsolutePath()
+    {
+        var path = SpecTestHost.Loader.FixturePath(SpecLoader.ModuleMinimalFixtureName);
+
+        var spec = SpecTestHost.Loader.LoadModuleFile(path);
+
+        Assert.Equal("zygisk_next", spec.Id);
+        Assert.Equal("win-main-01", spec.InstanceRef);
+    }
 }
 
 /// <summary>版本契约读取与两个独立递增序列的暴露方式。</summary>

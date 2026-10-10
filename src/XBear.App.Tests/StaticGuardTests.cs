@@ -636,14 +636,7 @@ public class TerminologyComplianceTests
         foreach (string path in UiSources.Enumerate().Where(p => p.EndsWith(".xaml", StringComparison.OrdinalIgnoreCase)))
         {
             string text = File.ReadAllText(path);
-            TerminologyCheckResult result = TerminologyValidator.CheckText(text, terminology);
-
-            foreach (TerminologyViolation violation in result.Violations)
-            {
-                offenders.Add(
-                    $"{Path.GetRelativePath(UiSources.Root, path)} 命中术语 {violation.TermId} " +
-                    $"的禁用词「{violation.ForbiddenWord}」：{violation.Context}");
-            }
+            offenders.AddRange(FindXamlTerminologyViolations(text, Relative(path), terminology));
         }
 
         Assert.True(
@@ -741,6 +734,346 @@ public class TerminologyComplianceTests
         Assert.Empty(violations);
     }
 
+    [Fact]
+    public void CsharpTerminologyGuardSelfTestAllowsTermIdentifiers()
+    {
+        TerminologyDocument terminology = XBeeSpec.TestSpec().LoadTerminology();
+
+        // 术语标识是术语表自身的键，其取值域与禁用词表同源，不参与禁用词比对。
+        const string catalogCode = """
+            namespace XBear.App.Presentation;
+
+            public sealed class TerminologyCatalog
+            {
+                public const string ApplicationTermId = "application";
+                public const string AppLaunchTermId = "app-launch";
+            }
+            """;
+
+        List<string> violations = FindCsharpTerminologyViolations(catalogCode, "Presentation/TerminologyCatalog.cs", terminology);
+
+        Assert.Empty(violations);
+    }
+
+    [Fact]
+    public void XamlTerminologyGuardSelfTestCatchesUserVisibleViolations()
+    {
+        TerminologyDocument terminology = XBeeSpec.TestSpec().LoadTerminology();
+
+        const string badXaml = """
+            <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Class="XBear.App.Views.BadWindow"
+                    Title="虚拟机实例">
+              <TextBlock TextWrapping="Wrap" Text="这是实例的分身" />
+              <WrapPanel>
+                <TextBlock Text="系统镜像加载失败" />
+              </WrapPanel>
+              <Button Content="点击开机" />
+            </Window>
+            """;
+
+        List<string> violations = FindXamlTerminologyViolations(badXaml, "Views/BadWindow.xaml", terminology);
+
+        Assert.Contains(violations, v => v.Contains("虚拟机实例"));
+        Assert.Contains(violations, v => v.Contains("分身"));
+        Assert.Contains(violations, v => v.Contains("系统镜像"));
+        Assert.Contains(violations, v => v.Contains("开机"));
+    }
+
+    [Fact]
+    public void XamlTerminologyGuardSelfTestAllowsMarkupIdentifiersAndComments()
+    {
+        TerminologyDocument terminology = XBeeSpec.TestSpec().LoadTerminology();
+
+        // 元素名、属性名、命名空间与资源键都是标记标识，不属于用户界面文案；
+        // 注释与 C# 侧保持一致地放行。
+        const string goodXaml = """
+            <!-- 注释里可以出现开机与虚拟机实例等说明性措辞 -->
+            <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    x:Class="XBear.App.Views.GoodWindow"
+                    Title="关于小熊模拟器">
+              <TextBlock TextWrapping="Wrap" Text="这是一个实例" />
+              <WrapPanel>
+                <Image Source="{StaticResource Brand.AppIcon}" />
+                <TextBlock Text="{DynamicResource Token.Color.Text.Primary}" />
+                <TextBlock Text="{Binding StatusText}" />
+              </WrapPanel>
+              <Style TargetType="Button">
+                <Setter Property="Foreground" Value="White" />
+              </Style>
+            </Window>
+            """;
+
+        List<string> violations = FindXamlTerminologyViolations(goodXaml, "Views/GoodWindow.xaml", terminology);
+
+        Assert.Empty(violations);
+    }
+
+    /// <summary>
+    /// 防止扫描因提取规则收紧而空转：界面真实文案必须仍被取到，
+    /// 否则上面的守卫会在什么都没扫到的情况下一直保持绿色。
+    /// </summary>
+    [Fact]
+    public void XamlTerminologyScanStillReadsRealUserFacingText()
+    {
+        string path = UiSources.Enumerate()
+            .First(p => p.EndsWith("MainWindow.xaml", StringComparison.OrdinalIgnoreCase));
+
+        List<string> extracted = ExtractXamlPresentationText(File.ReadAllText(path))
+            .Select(item => item.Text)
+            .ToList();
+
+        Assert.NotEmpty(extracted);
+        Assert.Contains(extracted, text => text.Contains("小熊模拟器", StringComparison.Ordinal));
+        Assert.Contains(extracted, text => text.Contains("投屏", StringComparison.Ordinal));
+        Assert.Contains(extracted, text => text.Contains("暴露级别", StringComparison.Ordinal));
+        Assert.DoesNotContain(extracted, text => text.Contains("WrapPanel", StringComparison.Ordinal));
+        Assert.DoesNotContain(extracted, text => text.Contains("XBear.App", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// 扫描 XAML 中的用户可见文案是否命中术语表中的禁用近义词。
+    /// 只取元素文本与承载文案的属性值；标记标识与资源键不是文案，按白名单放行。
+    /// </summary>
+    /// <param name="xamlText">XAML 源码文本。</param>
+    /// <param name="path">文件相对路径。</param>
+    /// <param name="terminology">术语表文档。</param>
+    /// <returns>违规描述列表。</returns>
+    public static List<string> FindXamlTerminologyViolations(
+        string xamlText,
+        string path,
+        TerminologyDocument terminology)
+    {
+        var violations = new List<string>();
+
+        foreach ((string text, int line) in ExtractXamlPresentationText(xamlText))
+        {
+            // 白名单说明：
+            // 标记扩展（绑定、静态资源、动态资源、类型引用）是表达式而非文案，
+            // 资源键本身也不是文案，两者都不参与禁用词比对。
+            string literal = StripMarkupExtensions(text);
+            if (literal.Length == 0 || IsResourceKey(literal))
+            {
+                continue;
+            }
+
+            TerminologyCheckResult result = TerminologyValidator.CheckText(literal, terminology);
+            foreach (TerminologyViolation violation in result.Violations)
+            {
+                violations.Add(
+                    $"{path} 第 {line} 行 XAML 文案命中术语 {violation.TermId} " +
+                    $"的禁用词「{violation.ForbiddenWord}」：{violation.Context}");
+            }
+        }
+
+        return violations;
+    }
+
+    /// <summary>XAML 中承载的是标记标识而非用户文案的属性名。</summary>
+    private static readonly HashSet<string> StructuralAttributeNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Class", "Name", "Key", "Source", "Target", "Command", "CommandParameter",
+        "Property", "TargetProperty", "Setter", "Ignorable", "Requires", "ProcessContent"
+    };
+
+    /// <summary>
+    /// 逐段提取 XAML 中的用户可见文案：元素文本内容与非结构属性的取值。
+    /// 注释、元素名与属性名一律跳过，与 C# 侧跳过注释的口径保持一致。
+    /// </summary>
+    /// <param name="xamlText">XAML 源码文本。</param>
+    /// <returns>文案文本及其起始行号。</returns>
+    public static IEnumerable<(string Text, int Line)> ExtractXamlPresentationText(string xamlText)
+    {
+        int i = 0;
+        int n = xamlText.Length;
+        int line = 1;
+
+        while (i < n)
+        {
+            char c = xamlText[i];
+
+            if (c == '\n')
+            {
+                line++;
+                i++;
+                continue;
+            }
+
+            // 注释不是文案，注释里可以自由解释被禁用的措辞为何被禁用。
+            if (c == '<' && i + 3 < n && xamlText.AsSpan(i, 4).SequenceEqual("<!--"))
+            {
+                i += 4;
+                while (i + 2 < n && !xamlText.AsSpan(i, 3).SequenceEqual("-->"))
+                {
+                    if (xamlText[i] == '\n')
+                    {
+                        line++;
+                    }
+
+                    i++;
+                }
+
+                i += 3;
+                continue;
+            }
+
+            if (c == '<')
+            {
+                int startLine = line;
+                while (i < n && xamlText[i] != '>')
+                {
+                    if (xamlText[i] == '"' || xamlText[i] == '\'')
+                    {
+                        char quote = xamlText[i];
+                        int valueStart = ++i;
+                        while (i < n && xamlText[i] != quote)
+                        {
+                            if (xamlText[i] == '\n')
+                            {
+                                line++;
+                            }
+
+                            i++;
+                        }
+
+                        string value = xamlText[valueStart..Math.Min(i, n)];
+                        if (!IsStructuralAttribute(xamlText, valueStart) && value.Length > 0)
+                        {
+                            yield return (value, startLine);
+                        }
+                    }
+
+                    if (xamlText[i] == '\n')
+                    {
+                        line++;
+                    }
+
+                    i++;
+                }
+
+                i++;
+                continue;
+            }
+
+            // 标签之间的文本内容直接展示给用户。
+            int textStart = i;
+            while (i < n && xamlText[i] != '<')
+            {
+                if (xamlText[i] == '\n')
+                {
+                    line++;
+                }
+
+                i++;
+            }
+
+            string content = xamlText[textStart..i];
+            if (content.Trim().Length > 0)
+            {
+                yield return (content.Trim(), line);
+            }
+        }
+    }
+
+    /// <summary>
+    /// 判断一个属性值是否来自结构属性，即仅承载标记标识而不承载文案。
+    /// </summary>
+    /// <param name="xamlText">XAML 源码文本。</param>
+    /// <param name="valueStart">属性值起始下标。</param>
+    /// <returns>该属性为结构属性时为 true。</returns>
+    private static bool IsStructuralAttribute(string xamlText, int valueStart)
+    {
+        // 属性写法为 Name="value"，取值左侧可能隔着空白、引号与等号，先一并跨过再回读属性名。
+        int end = valueStart;
+        while (end > 0 &&
+               (char.IsWhiteSpace(xamlText[end - 1]) ||
+                xamlText[end - 1] == '"' ||
+                xamlText[end - 1] == '\'' ||
+                xamlText[end - 1] == '='))
+        {
+            end--;
+        }
+
+        int nameEnd = end;
+        while (nameEnd > 0 && (char.IsLetterOrDigit(xamlText[nameEnd - 1]) ||
+                               xamlText[nameEnd - 1] == '.' ||
+                               xamlText[nameEnd - 1] == '_' ||
+                               xamlText[nameEnd - 1] == ':'))
+        {
+            nameEnd--;
+        }
+
+        if (nameEnd == end)
+        {
+            return false;
+        }
+
+        string name = xamlText[nameEnd..end];
+
+        if (name.StartsWith("xmlns", StringComparison.OrdinalIgnoreCase) ||
+            name.StartsWith("d:", StringComparison.OrdinalIgnoreCase) ||
+            name.StartsWith("mc:", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // 属性可能带前缀（如 x:Class），去掉前缀后比对裸名。
+        int prefixEnd = name.LastIndexOf(':');
+        string bareName = prefixEnd >= 0 ? name[(prefixEnd + 1)..] : name;
+
+        return StructuralAttributeNames.Contains(bareName);
+    }
+
+    /// <summary>
+    /// 去掉标记扩展表达式，只留下真正展示给用户的文字部分。
+    /// </summary>
+    /// <param name="value">XAML 属性值或文本内容。</param>
+    /// <returns>去掉标记扩展后的文本。</returns>
+    private static string StripMarkupExtensions(string value)
+    {
+        var sb = new StringBuilder();
+        int depth = 0;
+
+        foreach (char c in value)
+        {
+            if (c == '{')
+            {
+                depth++;
+                continue;
+            }
+
+            if (c == '}')
+            {
+                if (depth > 0)
+                {
+                    depth--;
+                }
+
+                continue;
+            }
+
+            if (depth == 0)
+            {
+                sb.Append(c);
+            }
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    /// <summary>
+    /// 判断一段文本是否为资源键。资源键与令牌键是程序符号，不是界面文案。
+    /// </summary>
+    /// <param name="text">待判断文本。</param>
+    /// <returns>为资源键时为 true。</returns>
+    private static bool IsResourceKey(string text) =>
+        text.StartsWith("Icon.", StringComparison.Ordinal) ||
+        text.StartsWith("Token.", StringComparison.Ordinal) ||
+        text.StartsWith("Palette.", StringComparison.Ordinal) ||
+        text.StartsWith("Brand.", StringComparison.Ordinal);
+
     /// <summary>
     /// 扫描 C# 代码中的用户可见字符串字面量是否命中术语表中的禁用近义词。
     /// </summary>
@@ -769,15 +1102,20 @@ public class TerminologyComplianceTests
         }
 
         var violations = new List<string>();
+        var termIds = terminology.Terms.Select(t => t.Id).ToHashSet(StringComparer.Ordinal);
 
         foreach ((string literal, int line) in ExtractStringLiterals(csharpText))
         {
             // 白名单说明：
-            // 资源键（如 Icon.*, Token.*, Palette.*, Brand.*）、协议标识符（如 tcp, udp）等内部程序符号不属于用户界面展示文案。
+            // 1. 资源键（如 Icon.*, Token.*, Palette.*, Brand.*）、协议标识符（如 tcp, udp）等内部程序符号
+            //    不属于用户界面展示文案；
+            // 2. 术语标识是术语表自身的键，与禁用词表同源，拿禁用词去比对术语标识必然自相矛盾，
+            //    因此按值整体放行，界面仍然只能通过术语目录取词，不得自行拼写概念名。
             if (literal.StartsWith("Icon.", StringComparison.Ordinal) ||
                 literal.StartsWith("Token.", StringComparison.Ordinal) ||
                 literal.StartsWith("Palette.", StringComparison.Ordinal) ||
                 literal.StartsWith("Brand.", StringComparison.Ordinal) ||
+                termIds.Contains(literal) ||
                 string.Equals(literal, "tcp", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(literal, "udp", StringComparison.OrdinalIgnoreCase))
             {

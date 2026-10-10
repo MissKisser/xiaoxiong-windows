@@ -41,7 +41,7 @@ public static class DeviceIdentityProvisioning
             throw new XBearException(
                 ErrorCategory.Internal,
                 "实例仓库未暴露配置文件目录，无法定位标识墓碑文件。",
-                "为实例创建流程注入组合根装配的标识工厂。");
+                "确认组合根装配已为实例创建流程提供标识工厂。");
         }
 
         string instancesRoot = Path.GetFullPath(files.Directory);

@@ -31,6 +31,18 @@ public sealed class SpecLoader
     /// <summary>实例快照 Schema 文件名。</summary>
     public const string SnapshotSchemaFileName = "snapshot.schema.json";
 
+    /// <summary>投屏会话 Schema 文件名。</summary>
+    public const string ProjectionSchemaFileName = "projection.schema.json";
+
+    /// <summary>传输任务 Schema 文件名。</summary>
+    public const string FileTransferSchemaFileName = "filetransfer.schema.json";
+
+    /// <summary>模块清单与安装状态 Schema 文件名。</summary>
+    public const string ModuleSchemaFileName = "module.schema.json";
+
+    /// <summary>应用管理 Schema 文件名，文件内含嵌套的操作记录契约。</summary>
+    public const string ApplicationSchemaFileName = "application.schema.json";
+
     /// <summary>术语表 Schema 文件名。</summary>
     public const string TerminologySchemaFileName = "terminology.schema.json";
 
@@ -48,6 +60,30 @@ public sealed class SpecLoader
 
     /// <summary>完整快照样例文件名，含可选字段与平台特有字段。</summary>
     public const string SnapshotFullFixtureName = "snapshot-full.json";
+
+    /// <summary>最小投屏会话样例文件名，只含必填字段。</summary>
+    public const string ProjectionMinimalFixtureName = "projection-minimal.json";
+
+    /// <summary>完整投屏会话样例文件名，含输入语义与平台特有字段。</summary>
+    public const string ProjectionFullFixtureName = "projection-full.json";
+
+    /// <summary>最小传输任务样例文件名，只含必填字段。</summary>
+    public const string FileTransferMinimalFixtureName = "filetransfer-minimal.json";
+
+    /// <summary>完整传输任务样例文件名，含进度、时刻与平台特有字段。</summary>
+    public const string FileTransferFullFixtureName = "filetransfer-full.json";
+
+    /// <summary>最小模块样例文件名，只含必填字段。</summary>
+    public const string ModuleMinimalFixtureName = "module-minimal.json";
+
+    /// <summary>完整模块样例文件名，含清单、结构约定与平台特有字段。</summary>
+    public const string ModuleFullFixtureName = "module-full.json";
+
+    /// <summary>最小应用样例文件名，只含必填字段。</summary>
+    public const string ApplicationMinimalFixtureName = "application-minimal.json";
+
+    /// <summary>完整应用样例文件名，含版本、来源与最近一次操作记录。</summary>
+    public const string ApplicationFullFixtureName = "application-full.json";
 
     /// <summary>术语表文件名。</summary>
     public const string TerminologyFileName = "terminology.json";
@@ -172,11 +208,55 @@ public sealed class SpecLoader
     /// <returns>解析后的镜像清单。</returns>
     public ImageSpec LoadImageFile(string absolutePath) => ParseImage(ReadText(absolutePath));
 
+    /// <summary>从文件读取并解析投屏会话。</summary>
+    /// <param name="absolutePath">投屏会话绝对路径。</param>
+    /// <returns>解析后的投屏会话。</returns>
+    public ProjectionSpec LoadProjectionFile(string absolutePath) => ParseProjection(ReadText(absolutePath));
+
+    /// <summary>从文件读取并解析传输任务。</summary>
+    /// <param name="absolutePath">传输任务绝对路径。</param>
+    /// <returns>解析后的传输任务。</returns>
+    public FileTransferSpec LoadFileTransferFile(string absolutePath) => ParseFileTransfer(ReadText(absolutePath));
+
+    /// <summary>从文件读取并解析模块清单与安装状态。</summary>
+    /// <param name="absolutePath">模块记录绝对路径。</param>
+    /// <returns>解析后的模块记录。</returns>
+    public ModuleSpec LoadModuleFile(string absolutePath) => ParseModule(ReadText(absolutePath));
+
+    /// <summary>从文件读取并解析应用记录。</summary>
+    /// <param name="absolutePath">应用记录绝对路径。</param>
+    /// <returns>解析后的应用记录。</returns>
+    public ApplicationSpec LoadApplicationFile(string absolutePath) => ParseApplication(ReadText(absolutePath));
+
     /// <summary>读取并解析指定样例文件中的快照元数据。</summary>
     /// <param name="fixtureFileName">样例文件名。</param>
     /// <returns>解析后的快照元数据。</returns>
     public SnapshotSpec LoadSnapshotFixture(string fixtureFileName) =>
         ParseSnapshot(ReadFixtureText(fixtureFileName));
+
+    /// <summary>读取并解析指定样例文件中的投屏会话。</summary>
+    /// <param name="fixtureFileName">样例文件名。</param>
+    /// <returns>解析后的投屏会话。</returns>
+    public ProjectionSpec LoadProjectionFixture(string fixtureFileName) =>
+        ParseProjection(ReadFixtureText(fixtureFileName));
+
+    /// <summary>读取并解析指定样例文件中的传输任务。</summary>
+    /// <param name="fixtureFileName">样例文件名。</param>
+    /// <returns>解析后的传输任务。</returns>
+    public FileTransferSpec LoadFileTransferFixture(string fixtureFileName) =>
+        ParseFileTransfer(ReadFixtureText(fixtureFileName));
+
+    /// <summary>读取并解析指定样例文件中的模块清单与安装状态。</summary>
+    /// <param name="fixtureFileName">样例文件名。</param>
+    /// <returns>解析后的模块记录。</returns>
+    public ModuleSpec LoadModuleFixture(string fixtureFileName) =>
+        ParseModule(ReadFixtureText(fixtureFileName));
+
+    /// <summary>读取并解析指定样例文件中的应用记录。</summary>
+    /// <param name="fixtureFileName">样例文件名。</param>
+    /// <returns>解析后的应用记录。</returns>
+    public ApplicationSpec LoadApplicationFixture(string fixtureFileName) =>
+        ParseApplication(ReadFixtureText(fixtureFileName));
 
     /// <summary>读取并解析版本契约。</summary>
     /// <returns>解析后的版本契约文档。</returns>
@@ -247,6 +327,42 @@ public sealed class SpecLoader
     /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
     public SnapshotSpec ParseSnapshot(string json) =>
         Deserialize<SnapshotSpec>(json, "快照元数据");
+
+    /// <summary>
+    /// 解析投屏会话 JSON。
+    /// </summary>
+    /// <param name="json">投屏会话 JSON 文本。</param>
+    /// <returns>解析后的投屏会话。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public ProjectionSpec ParseProjection(string json) =>
+        Deserialize<ProjectionSpec>(json, "投屏会话");
+
+    /// <summary>
+    /// 解析传输任务 JSON。
+    /// </summary>
+    /// <param name="json">传输任务 JSON 文本。</param>
+    /// <returns>解析后的传输任务。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public FileTransferSpec ParseFileTransfer(string json) =>
+        Deserialize<FileTransferSpec>(json, "传输任务");
+
+    /// <summary>
+    /// 解析模块清单与安装状态 JSON。
+    /// </summary>
+    /// <param name="json">模块记录 JSON 文本。</param>
+    /// <returns>解析后的模块记录。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public ModuleSpec ParseModule(string json) =>
+        Deserialize<ModuleSpec>(json, "模块记录");
+
+    /// <summary>
+    /// 解析应用记录 JSON。
+    /// </summary>
+    /// <param name="json">应用记录 JSON 文本。</param>
+    /// <returns>解析后的应用记录。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public ApplicationSpec ParseApplication(string json) =>
+        Deserialize<ApplicationSpec>(json, "应用记录");
 
     /// <summary>
     /// 解析版本契约 JSON。
