@@ -3,25 +3,122 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using XBear.Core.Diagnostics;
+using XBear.Core.Identity;
+using XBear.Core.Spec;
 
 namespace XBear.App.Services;
 
 /// <summary>
 /// initrd 定制策略。
-///
 /// 策略内容会参与产物指纹的计算：任一字段变化都会让指纹变化，从而触发重新定制。
+/// 支持 ADB 调试通路、root 权限、开机模块加载器以及抗取证检测隐藏定制项。
 /// </summary>
 /// <param name="AdbGuestPort">guest 内 adbd 的监听端口。</param>
 /// <param name="AdbPublicKey">写入 guest 授权列表的宿主 ADB 公钥。</param>
 /// <param name="AdbApexMountPath">adbd 二进制所在的 APEX 挂载点。</param>
-/// <param name="EnableRoot">是否使能 root 权限（local.prop 与 setprop 断言）。</param>
+/// <param name="EnableRoot">是否使能 root 权限。</param>
 /// <param name="EnableModuleLoader">是否启用开机模块加载器（扫描 /data/adb/modules 并叠加）。</param>
+/// <param name="EnableBuildPropOverlay">是否启用 build.prop 覆写（A-03）。</param>
+/// <param name="BuildPropContent">覆写的 build.prop 属性文本，由 PropertyOverlayBuilder 生成。</param>
+/// <param name="EnableAndroidIdProvisioning">是否启用 Android ID 消费与回读（A-05/S-3）。</param>
+/// <param name="TargetAndroidId">待落地的 Android ID（16 位小写十六进制字符串）。</param>
+/// <param name="EnableNetworkConvergence">是否启用网络收敛与默认路由补齐（A-08）。</param>
+/// <param name="RenameInterfaceToWlan0">是否将网络接口 eth0 重命名为 wlan0。</param>
+/// <param name="DefaultGateway">默认路由网关 IP 地址。</param>
+/// <param name="RootStealth">是否启用 root 痕迹去明文持久化（A-16，消除 local.prop 明文，仅运行时断言）。</param>
+/// <param name="CleanupKernelSuRemnants">是否清理非本产品的 KernelSU 遗留目录与二进制（A-14/Q-02）。</param>
+/// <param name="EmbeddedSrc">内嵌的安装态 SRC 标记（A-13，消除可见 cmdline 中的 SRC= 参数）。</param>
 public sealed record InitrdCustomizationPolicy(
     int AdbGuestPort,
     string AdbPublicKey,
     string AdbApexMountPath,
     bool EnableRoot = true,
-    bool EnableModuleLoader = true);
+    bool EnableModuleLoader = true,
+    bool EnableBuildPropOverlay = false,
+    string? BuildPropContent = null,
+    bool EnableAndroidIdProvisioning = false,
+    string? TargetAndroidId = null,
+    bool EnableNetworkConvergence = false,
+    bool RenameInterfaceToWlan0 = false,
+    string? DefaultGateway = null,
+    bool RootStealth = false,
+    bool CleanupKernelSuRemnants = false,
+    string? EmbeddedSrc = null)
+{
+    /// <summary>
+    /// 是否启用了任何抗取证扩展定制项。
+    /// 当全部为默认关闭值时，指纹计算完全等价于传统策略，确保已有镜像产物不被误判二次定制。
+    /// </summary>
+    public bool HasAntiforensicsCustomizations =>
+        EnableBuildPropOverlay ||
+        !string.IsNullOrWhiteSpace(BuildPropContent) ||
+        EnableAndroidIdProvisioning ||
+        !string.IsNullOrWhiteSpace(TargetAndroidId) ||
+        EnableNetworkConvergence ||
+        RenameInterfaceToWlan0 ||
+        !string.IsNullOrWhiteSpace(DefaultGateway) ||
+        RootStealth ||
+        CleanupKernelSuRemnants ||
+        !string.IsNullOrWhiteSpace(EmbeddedSrc);
+
+    /// <summary>
+    /// 便捷工厂方法：按画像与身份对象构建全套抗取证定制策略。
+    /// </summary>
+    /// <param name="adbGuestPort">guest 内 adbd 监听端口。</param>
+    /// <param name="adbPublicKey">宿主 ADB 公钥。</param>
+    /// <param name="adbApexMountPath">adbd APEX 挂载点。</param>
+    /// <param name="profile">机型族画像。</param>
+    /// <param name="identity">设备身份规格，可为空。</param>
+    /// <param name="defaultGateway">默认路由网关，可为空。</param>
+    /// <param name="embeddedSrc">内嵌安装态 SRC 标记，可为空。</param>
+    /// <param name="enableRoot">是否启用 root 权限。</param>
+    /// <param name="rootStealth">是否隐藏 root 明文持久化。</param>
+    /// <param name="enableModuleLoader">是否启用开机模块加载器。</param>
+    /// <param name="cleanupKernelSuRemnants">是否清理残缺 KernelSU 痕迹。</param>
+    /// <param name="renameInterfaceToWlan0">是否重命名网络接口为 wlan0。</param>
+    /// <param name="enableRenderSpoofing">是否启用渲染伪装，默认 false（Q-06 默认保守）。</param>
+    /// <returns>抗取证 initrd 定制策略。</returns>
+    public static InitrdCustomizationPolicy CreateAntiforensicsPolicy(
+        int adbGuestPort,
+        string adbPublicKey,
+        string adbApexMountPath,
+        DeviceProfile profile,
+        IdentitySpec? identity = null,
+        string? defaultGateway = null,
+        string? embeddedSrc = null,
+        bool enableRoot = true,
+        bool rootStealth = true,
+        bool enableModuleLoader = true,
+        bool cleanupKernelSuRemnants = true,
+        bool renameInterfaceToWlan0 = true,
+        bool enableRenderSpoofing = false)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+
+        string propContent = identity is not null
+            ? PropertyOverlayBuilder.BuildBuildPropContent(identity, enableRenderSpoofing)
+            : PropertyOverlayBuilder.BuildBuildPropContent(profile, enableRenderSpoofing: enableRenderSpoofing);
+
+        string? targetAndroidId = identity?.AndroidId;
+
+        return new InitrdCustomizationPolicy(
+            AdbGuestPort: adbGuestPort,
+            AdbPublicKey: adbPublicKey,
+            AdbApexMountPath: adbApexMountPath,
+            EnableRoot: enableRoot,
+            EnableModuleLoader: enableModuleLoader,
+            EnableBuildPropOverlay: true,
+            BuildPropContent: propContent,
+            EnableAndroidIdProvisioning: !string.IsNullOrWhiteSpace(targetAndroidId),
+            TargetAndroidId: targetAndroidId,
+            EnableNetworkConvergence: true,
+            RenameInterfaceToWlan0: renameInterfaceToWlan0,
+            DefaultGateway: defaultGateway,
+            RootStealth: rootStealth,
+            CleanupKernelSuRemnants: cleanupKernelSuRemnants,
+            EmbeddedSrc: embeddedSrc);
+    }
+}
 
 /// <summary>一次 initrd 定制的终态。</summary>
 public enum InitrdCustomizationOutcome
@@ -49,31 +146,7 @@ public sealed record InitrdCustomizationResult(
     IReadOnlyList<string> CustomizedEntries);
 
 /// <summary>
-/// 把从镜像中提取的原版 initrd 加工为带 ADB 调试通路的定制 initrd。
-///
-/// 定制内容与取舍：
-/// <list type="number">
-/// <item>scripts/0-auto-detect 的 auto_detect 与 auto_detect_alpine 打桩为空实现。
-/// 上游实现按设备 modalias 逐个同步 modprobe，在硬件虚拟化下会卡死引导流程；
-/// 模块加载改由 Android 自身的 init 完成。</item>
-/// <item>挂载数据分区后写入宿主 ADB 公钥。镜像的 ro.adb.secure 为 1，
-/// 未预置授权时每次连接都要在 guest 界面点确认，宿主无法完成握手。</item>
-/// <item>APEX 就绪后自动拉起 adbd。该镜像不在 /system/bin 提供 adbd，
-/// 也没有对应的 init.rc 服务，调试通路必须由 initrd 显式拉起。</item>
-/// <item>root 使能：向 guest 的 /data/local.prop 追加 service.adb.root=1，
-/// 并在拉起 adbd 之前再经 setprop 断言一次。adbd 只在自身启动的那一次读该属性，
-/// 仅靠持久化文件不足以保证生效，两处缺一不可。</item>
-/// <item>模块加载器：开机扫描持久化 /data 上的模块目录，把模块的 system/ 子树
-/// 叠加进系统并执行其阶段脚本。该内核的 KernelSU 是残缺实现（对用户态上报 UAPI=0），
-/// Magisk 依赖同一内核桩，因此模块机制由 initrd 自身提供。</item>
-/// </list>
-///
-/// 产物文件名与原版保持一致：boot 推荐引用的就是同一个文件名，
-/// 只有内容被替换，因此实例侧的配置无需任何改动。
-/// 原版另存为 .stock 留档，定制失败或策略变更时可据此重生成。
-///
-/// 幂等判定内建在产物自身：注入块带有策略指纹，重复运行时先读出指纹再决定是否重做，
-/// 不依赖任何旁路文件，因此产物被单独拷贝出去也不会被二次注入。
+/// 把从镜像中提取的原版 initrd 加工为带 ADB 调试通路与抗取证检测隐藏栈的定制 initrd。
 /// </summary>
 public sealed class InitrdCustomizerService
 {
@@ -88,6 +161,12 @@ public sealed class InitrdCustomizerService
 
     /// <summary>initrd 内被改写的根脚本条目名。</summary>
     public const string InitEntryName = "init";
+
+    /// <summary>initrd 内构建属性覆写条目名。</summary>
+    public const string BuildPropOverrideEntryName = "etc/build.prop.override";
+
+    /// <summary>initrd 内内嵌安装态 SRC 标记条目名。</summary>
+    public const string BootSrcEntryName = "etc/boot_src";
 
     /// <summary>guest 内 adbd 的固定监听端口，与端口转发目标保持一致。</summary>
     public const int DefaultAdbGuestPort = 5555;
@@ -110,6 +189,7 @@ public sealed class InitrdCustomizerService
     private readonly string _hostAdbPublicKeyPath;
     private readonly bool _enableRoot;
     private readonly bool _enableModuleLoader;
+    private readonly InitrdCustomizationPolicy? _customPolicy;
 
     /// <summary>
     /// 以默认宿主公钥路径与默认策略选项构造定制服务。
@@ -143,11 +223,29 @@ public sealed class InitrdCustomizerService
         _hostAdbPublicKeyPath = hostAdbPublicKeyPath;
         _enableRoot = enableRoot;
         _enableModuleLoader = enableModuleLoader;
+        _customPolicy = null;
+    }
+
+    /// <summary>
+    /// 以指定宿主公钥路径与定制策略构造定制服务。
+    /// </summary>
+    /// <param name="hostAdbPublicKeyPath">宿主 ADB 公钥文件路径。</param>
+    /// <param name="policy">定制策略。</param>
+    public InitrdCustomizerService(
+        string hostAdbPublicKeyPath,
+        InitrdCustomizationPolicy policy)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(hostAdbPublicKeyPath);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        _hostAdbPublicKeyPath = hostAdbPublicKeyPath;
+        _enableRoot = policy.EnableRoot;
+        _enableModuleLoader = policy.EnableModuleLoader;
+        _customPolicy = policy;
     }
 
     /// <summary>
     /// 定制指定的 initrd：读取原版留档或就地留存原版，套用定制后写回同一路径。
-    ///
     /// 幂等：目标已是当前策略下的定制产物时直接跳过，不重复解压重打包。
     /// </summary>
     /// <param name="initrdPath">initrd 文件路径，写入后内容为定制版本。</param>
@@ -160,7 +258,35 @@ public sealed class InitrdCustomizerService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(initrdPath);
 
-        return Task.FromResult(Customize(initrdPath, cancellationToken));
+        string publicKey = ReadHostAdbPublicKey();
+        var policy = _customPolicy ?? new InitrdCustomizationPolicy(
+            DefaultAdbGuestPort,
+            publicKey,
+            DefaultAdbApexMountPath,
+            _enableRoot,
+            _enableModuleLoader);
+
+        return Task.FromResult(Customize(initrdPath, policy, cancellationToken));
+    }
+
+    /// <summary>
+    /// 使用指定的定制策略定制指定的 initrd。
+    /// 幂等：目标已是当前策略下的定制产物时直接跳过，不重复解压重打包。
+    /// </summary>
+    /// <param name="initrdPath">initrd 文件路径，写入后内容为定制版本。</param>
+    /// <param name="policy">本次定制策略。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>定制结果。</returns>
+    /// <exception cref="XBearException">宿主公钥缺失、归档格式非法或锚点找不到时抛出。</exception>
+    public Task<InitrdCustomizationResult> CustomizeAsync(
+        string initrdPath,
+        InitrdCustomizationPolicy policy,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(initrdPath);
+        ArgumentNullException.ThrowIfNull(policy);
+
+        return Task.FromResult(Customize(initrdPath, policy, cancellationToken));
     }
 
     /// <summary>
@@ -173,30 +299,46 @@ public sealed class InitrdCustomizerService
     {
         ArgumentNullException.ThrowIfNull(policy);
 
-        string material = string.Join(
-            "\n",
+        var parts = new List<string>
+        {
             policy.AdbGuestPort.ToString(CultureInfo.InvariantCulture),
             policy.AdbPublicKey,
             policy.AdbApexMountPath,
             policy.EnableRoot ? "root:1" : "root:0",
             policy.EnableModuleLoader ? "modules:1" : "modules:0",
-            AutoDetectStubMarker);
+            AutoDetectStubMarker,
+        };
 
+        if (policy.HasAntiforensicsCustomizations)
+        {
+            parts.Add(policy.EnableBuildPropOverlay ? $"buildprop:1:{policy.BuildPropContent}" : "buildprop:0");
+            parts.Add(policy.EnableAndroidIdProvisioning ? $"android_id:1:{policy.TargetAndroidId}" : "android_id:0");
+            parts.Add(policy.EnableNetworkConvergence
+                ? $"net:1:{policy.RenameInterfaceToWlan0}:{policy.DefaultGateway}"
+                : "net:0");
+            parts.Add(policy.RootStealth ? "root_stealth:1" : "root_stealth:0");
+            parts.Add(policy.CleanupKernelSuRemnants ? "ksu_clean:1" : "ksu_clean:0");
+            parts.Add(!string.IsNullOrWhiteSpace(policy.EmbeddedSrc) ? $"src:{policy.EmbeddedSrc.Trim()}" : "src:none");
+        }
+
+        string material = string.Join("\n", parts);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))
             .ToLowerInvariant();
     }
 
     /// <summary>
     /// 执行定制流程。
-    ///
     /// 幂等判定顺序：先看目标产物内嵌的指纹是否等于当前策略指纹，
-    /// 相等即原样返回。判定完全基于产物内容，不依赖任何旁路文件，
-    /// 因此产物被单独拷贝到别处也不会被二次注入。
+    /// 相等即原样返回。判定完全基于产物内容，不依赖任何旁路文件。
     /// </summary>
     /// <param name="initrdPath">initrd 文件路径。</param>
+    /// <param name="policy">本次使用的策略。</param>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>定制结果。</returns>
-    private InitrdCustomizationResult Customize(string initrdPath, CancellationToken cancellationToken)
+    private InitrdCustomizationResult Customize(
+        string initrdPath,
+        InitrdCustomizationPolicy policy,
+        CancellationToken cancellationToken)
     {
         if (!File.Exists(initrdPath))
         {
@@ -206,20 +348,10 @@ public sealed class InitrdCustomizerService
                 "确认镜像导入已完成引导资产提取，且 initrd 文件名与 boot 推荐一致。");
         }
 
-        string publicKey = ReadHostAdbPublicKey();
-        var policy = new InitrdCustomizationPolicy(
-            DefaultAdbGuestPort,
-            publicKey,
-            DefaultAdbApexMountPath,
-            _enableRoot,
-            _enableModuleLoader);
         string fingerprint = ComputeFingerprint(policy);
-
         string stockPath = ResolveStockPath(initrdPath);
         bool hasStock = File.Exists(stockPath);
 
-        // 指纹随产物一同写入，判定幂等只需读目标本身，不必依赖任何旁路文件。
-        // 代价是一次解压解包，换来的是产物被单独拷走也不会被二次注入。
         cancellationToken.ThrowIfCancellationRequested();
         string? embedded = ReadEmbeddedFingerprint(initrdPath);
 
@@ -233,8 +365,6 @@ public sealed class InitrdCustomizerService
                 Array.Empty<string>());
         }
 
-        // 目标已带定制痕迹但留档缺失时，不得拿它冒充原版重新叠加：
-        // 那样会在注入块上再叠一层，引导脚本随即无法解析。
         if (!hasStock && embedded is not null)
         {
             throw new XBearException(
@@ -284,7 +414,7 @@ public sealed class InitrdCustomizerService
     }
 
     /// <summary>
-    /// 对归档套用三处定制，返回被改写的条目名。
+    /// 对归档套用定制，返回被改写的条目名。
     /// </summary>
     /// <param name="entries">归档条目。</param>
     /// <param name="policy">定制策略。</param>
@@ -295,7 +425,29 @@ public sealed class InitrdCustomizerService
         InitrdCustomizationPolicy policy,
         string fingerprint)
     {
-        var customized = new List<string>(2);
+        var customized = new List<string>(4);
+
+        if (policy.EnableBuildPropOverlay && !string.IsNullOrWhiteSpace(policy.BuildPropContent))
+        {
+            byte[] content = Encoding.UTF8.GetBytes(policy.BuildPropContent);
+            CpioNewcArchive.SetOrAddEntry(entries, BuildPropOverrideEntryName, content);
+            customized.Add(BuildPropOverrideEntryName);
+        }
+        else
+        {
+            CpioNewcArchive.RemoveEntry(entries, BuildPropOverrideEntryName);
+        }
+
+        if (!string.IsNullOrWhiteSpace(policy.EmbeddedSrc))
+        {
+            byte[] content = Encoding.UTF8.GetBytes(policy.EmbeddedSrc.Trim());
+            CpioNewcArchive.SetOrAddEntry(entries, BootSrcEntryName, content);
+            customized.Add(BootSrcEntryName);
+        }
+        else
+        {
+            CpioNewcArchive.RemoveEntry(entries, BootSrcEntryName);
+        }
 
         foreach (CpioNewcEntry entry in entries)
         {
@@ -332,10 +484,6 @@ public sealed class InitrdCustomizerService
 
     /// <summary>
     /// 把自动探测脚本中的两个函数打桩为空实现。
-    ///
-    /// 采用文本级替换而非整文件覆写：上游脚本的其余部分（load_modules 等）
-    /// 仍需按原样工作，覆写会在上游小版本变动时静默丢失这些逻辑。
-    /// 任一函数找不到即报错，不允许产出打了折扣的产物。
     /// </summary>
     /// <param name="script">脚本原文。</param>
     /// <returns>打桩后的脚本。</returns>
@@ -344,8 +492,6 @@ public sealed class InitrdCustomizerService
         string result = ReplaceShellFunction(script, "auto_detect");
         result = ReplaceShellFunction(result, "auto_detect_alpine");
 
-        // 打桩的产出是引导脚本，少一个左花括号这类错误会让整个 initramfs 起不来，
-        // 而它又发生在纯文本处理里、无法在编译期暴露，因此在出口处显式校验。
         VerifyFunctionBodiesAreStubbed(result);
         return result;
     }
@@ -389,7 +535,6 @@ public sealed class InitrdCustomizerService
 
     /// <summary>
     /// 把 shell 脚本中指定函数的函数体整体替换为桩实现。
-    /// 函数边界以独立的左花括号行与右花括号行界定，与目标脚本的书写风格一致。
     /// </summary>
     /// <param name="script">脚本原文。</param>
     /// <param name="functionName">函数名，不含参数列表。</param>
@@ -418,8 +563,6 @@ public sealed class InitrdCustomizerService
                 "该 initramfs 的引导脚本结构已变化，需要为其单独定制。");
         }
 
-        // 函数头与左花括号之间的部分原样保留，只有函数体被替换：
-// 右花括号落在 closeIndex 上，其后所有行同样原样保留。
         var rebuilt = new List<string>(lines.Length);
         rebuilt.AddRange(lines[..openIndex]);
         rebuilt.Add(lines[openIndex]);
@@ -452,7 +595,7 @@ public sealed class InitrdCustomizerService
     }
 
     /// <summary>
-    /// 找到 shell 函数的头部行，形如 <c>name()</c>。
+    /// 找到 shell 函数的头部行，形如 name()。
     /// </summary>
     /// <param name="lines">脚本行。</param>
     /// <param name="functionName">函数名。</param>
@@ -471,13 +614,7 @@ public sealed class InitrdCustomizerService
     }
 
     /// <summary>
-    /// 在根脚本的数据分区挂载之后注入调试通路：预置授权公钥、保持数据挂载点可见、
-    /// 在属性服务与 APEX 就绪后断言 root 并拉起 adbd，并在开机时扫描与挂载模块。
-    ///
-    /// 关机时的页缓存同步自愈（sync）：
-    /// 模块加载器在每次应用模块后均显式调用 sync 刷盘；
-    /// 而实例运行期间动态写入模块或文件后的关机前 sync，依职责划分归属宿主侧的实例停止流程
-    /// （宿主在停止实例前通过调试通道或 ADB 执行 sync），不在此处注入常驻的后台同步循环。
+    /// 在根脚本的数据分区挂载之后注入调试通路与抗取证检测隐藏逻辑。
     /// </summary>
     /// <param name="script">脚本原文。</param>
     /// <param name="policy">定制策略。</param>
@@ -489,6 +626,20 @@ public sealed class InitrdCustomizerService
         string fingerprint)
     {
         const string Anchor = "mount_data\nmount_sdcard\n";
+        const string RootLoopAnchor = "cd /\nwhile :; do\n";
+
+        // A-13: 内嵌 SRC 恢复逻辑（消除可见 cmdline 中的 SRC= 参数）。
+        // 在实机引导中必须在 check_root 遍历各块设备之前就位，否则缺少 $SRC 导致 check_root 无法匹配安装目录；
+        // 若脚本包含根目录探测循环锚点则在其之前注入，未包含时（如简易测试用桩脚本）回落至 mount_data 处。
+        if (!string.IsNullOrWhiteSpace(policy.EmbeddedSrc) && script.Contains(RootLoopAnchor, StringComparison.Ordinal))
+        {
+            const string srcRecovery = "# --- 抗取证：cmdline 收敛内嵌 SRC 恢复 (A-13) ----------------\n" +
+                                       "if [ -z \"$SRC\" ] && [ -f /etc/boot_src ]; then\n" +
+                                       "\tSRC=`cat /etc/boot_src 2>/dev/null`\n" +
+                                       "\techo \"recovered SRC=$SRC from /etc/boot_src\"\n" +
+                                       "fi\n";
+            script = script.Replace(RootLoopAnchor, srcRecovery + "\n" + RootLoopAnchor, StringComparison.Ordinal);
+        }
 
         int anchorIndex = script.IndexOf(Anchor, StringComparison.Ordinal);
         if (anchorIndex < 0)
@@ -508,27 +659,126 @@ public sealed class InitrdCustomizerService
             "",
             FingerprintMarkerPrefix + fingerprint,
             "",
-            "# --- 调试通路：启用 ADB over TCP 与 root -----------------------",
-            "# adbd 在启动时读取 service.adb.tcp.port 与 service.adb.root，",
-            "# 该值由 property_load_boot_defaults() 从 /data/local.prop 载入，",
-            "# 因此设置可跨重启保留且无需改动 /system。",
-            "if [ -d /android/data ]; then",
-            $"\techo \"service.adb.tcp.port={adbGuestPort.ToString(CultureInfo.InvariantCulture)}\" > /android/data/local.prop",
         };
 
-        if (policy.EnableRoot)
+        // A-13 回落兜底：若前序未命中 RootLoopAnchor，则在 mount_data 之后注入以满足轻量桩脚本断言
+        if (!string.IsNullOrWhiteSpace(policy.EmbeddedSrc) && !script.Contains(RootLoopAnchor, StringComparison.Ordinal))
         {
-            lines.Add("\techo \"service.adb.root=1\" >> /android/data/local.prop");
+            lines.Add("# --- 抗取证：cmdline 收敛内嵌 SRC 恢复 (A-13) ----------------");
+            lines.Add("if [ -z \"$SRC\" ] && [ -f /etc/boot_src ]; then");
+            lines.Add("\tSRC=`cat /etc/boot_src 2>/dev/null`");
+            lines.Add("\techo \"recovered SRC=$SRC from /etc/boot_src\"");
+            lines.Add("fi");
+            lines.Add("");
         }
 
-        lines.Add("\tchmod 644 /android/data/local.prop");
-        lines.Add("\techo \"service.adb.tcp.port written to /android/data/local.prop\"");
-        lines.Add("else");
-        lines.Add("\techo \"/android/data missing, ADB over TCP not configured\"");
-        lines.Add("fi");
+        // A-03: build.prop 覆盖逻辑（在 chroot 交接之前生效）
+        if (policy.EnableBuildPropOverlay)
+        {
+            lines.Add("# --- 抗取证：build.prop 覆写 (A-03) -------------------------");
+            lines.Add("# 覆写必须以「追加」而非「整体替换」的方式生效：");
+            lines.Add("# build.prop 是 system_server 启动的必需输入，整文件替换会抹掉 SDK 版本、");
+            lines.Add("# ABI 列表与显示密度等全部原有属性，导致用户空间框架无法启动。");
+            lines.Add("# build.prop 中后出现的同名键覆盖先出现的同名键，追加即可实现按实例覆真。");
+            lines.Add("# 覆写需覆盖全部分区的 prop 文件：属性服务按 system → vendor → odm → product →");
+            lines.Add("# system_ext 的顺序依次载入，后者覆盖前者，只追加 system 会被其余分区回写。");
+            lines.Add("if [ -f /etc/build.prop.override ]; then");
+            lines.Add("\tfor target in /android/system/build.prop \\");
+            lines.Add("\t\t/android/build.prop \\");
+            lines.Add("\t\t/android/system/etc/prop.default \\");
+            lines.Add("\t\t/android/vendor/build.prop \\");
+            lines.Add("\t\t/android/odm/etc/build.prop \\");
+            lines.Add("\t\t/android/product/etc/build.prop \\");
+            lines.Add("\t\t/android/system_ext/etc/build.prop \\");
+            lines.Add("\t\t/android/default.prop /android/prop.default; do");
+            lines.Add("\t\tif [ -f \"$target\" ]; then");
+            lines.Add("\t\t\tmount -o remount,rw /android 2>/dev/null");
+            lines.Add("\t\t\tmount -o remount,rw \"$(dirname \"$target\")\" 2>/dev/null");
+            lines.Add("\t\t\tcat /etc/build.prop.override >> \"$target\" 2>/dev/null");
+            lines.Add("\t\tfi");
+            lines.Add("\tdone");
+            lines.Add("\techo \"build.prop overlay appended\"");
+            lines.Add("fi");
+            lines.Add("");
+        }
+
+        // A-14 / Q-02: 清理非本产品的 KernelSU 遗留目录与可执行文件
+        if (policy.CleanupKernelSuRemnants)
+        {
+            lines.Add("# --- 抗取证：模块目录低代价清理 (A-14/Q-02) ------------------");
+            lines.Add("rm -f /android/data/adb/ksud 2>/dev/null");
+            lines.Add("rm -rf /android/data/adb/ksu 2>/dev/null");
+            lines.Add("");
+        }
+
+        // A-08: 网络收敛（接口改名）
+        if (policy.EnableNetworkConvergence)
+        {
+            lines.Add("# --- 抗取证：网络收敛 (A-08) -------------------------------");
+            if (policy.RenameInterfaceToWlan0)
+            {
+                lines.Add("if [ -d /sys/class/net/eth0 ]; then");
+                lines.Add("\tip link set eth0 down 2>/dev/null");
+                lines.Add("\tip link set eth0 name wlan0 2>/dev/null");
+                lines.Add("\tip link set wlan0 up 2>/dev/null");
+                lines.Add("\techo \"network interface renamed eth0 -> wlan0\"");
+                lines.Add("fi");
+            }
+
+            lines.Add("");
+        }
+
+        // A-08 补齐：默认路由补齐
+        // 该段位于 mount_data 锚点，执行时网卡尚未取得地址，此时下发的默认路由
+        // 会被内核直接丢弃，表现为实例始终缺失默认路由。改为开机完成后由后台进程补齐。
+        if (policy.EnableNetworkConvergence && !string.IsNullOrWhiteSpace(policy.DefaultGateway))
+        {
+            string gateway = policy.DefaultGateway.Trim();
+            lines.Add("# --- 抗取证：默认路由补齐 (A-08，开机后补齐) -----------------");
+            lines.Add("( r=0");
+            lines.Add("  while [ $r -lt 180 ]; do");
+            lines.Add("\t[ \"`chroot /android /system/bin/getprop sys.boot_completed 2>/dev/null`\" = \"1\" ] && break");
+            lines.Add("\tsleep 1; r=$((r + 1))");
+            lines.Add("  done");
+            lines.Add("  net_dev=\"eth0\"");
+            lines.Add("  [ -d /sys/class/net/wlan0 ] && net_dev=\"wlan0\"");
+            lines.Add($"  chroot /android /system/bin/ip route replace default via {gateway} dev $net_dev 2>/dev/null || \\");
+            lines.Add($"    chroot /android /system/bin/ip route add default via {gateway} dev $net_dev 2>/dev/null || \\");
+            lines.Add($"    chroot /android /system/bin/ip route add default via {gateway} 2>/dev/null");
+            lines.Add($"  echo \"default route ensure result: `chroot /android /system/bin/ip route show default 2>/dev/null`\"");
+            lines.Add(") &");
+            lines.Add("");
+        }
+
+        // A-16: 调试通路与 root 使能（去明文持久化）
+        lines.Add("# --- 调试通路：启用 ADB over TCP 与 root -----------------------");
+        if (policy.RootStealth)
+        {
+            lines.Add("# 抗取证模式：消除 /data/local.prop 明文持久化，改由运行时 setprop 断言 (A-16)");
+            lines.Add("if [ -d /android/data ]; then");
+            lines.Add("\tif [ -f /android/data/local.prop ]; then");
+            lines.Add("\t\tsed -i '/service\\.adb\\.root/d' /android/data/local.prop 2>/dev/null");
+            lines.Add("\t\tsed -i '/service\\.adb\\.tcp\\.port/d' /android/data/local.prop 2>/dev/null");
+            lines.Add("\tfi");
+            lines.Add("fi");
+        }
+        else
+        {
+            lines.Add("if [ -d /android/data ]; then");
+            lines.Add($"\techo \"service.adb.tcp.port={adbGuestPort.ToString(CultureInfo.InvariantCulture)}\" > /android/data/local.prop");
+            if (policy.EnableRoot)
+            {
+                lines.Add("\techo \"service.adb.root=1\" >> /android/data/local.prop");
+            }
+            lines.Add("\tchmod 644 /android/data/local.prop");
+            lines.Add("\techo \"service.adb.tcp.port written to /android/data/local.prop\"");
+            lines.Add("else");
+            lines.Add("\techo \"/android/data missing, ADB over TCP not configured\"");
+            lines.Add("fi");
+        }
         lines.Add("");
+
         lines.Add("# 预置宿主 ADB 公钥，使握手无需界面确认。");
-        lines.Add("# adbd 以 uid 2000（shell）或 uid 0（root）运行，属主与权限必须与之匹配。");
         lines.Add("mkdir -p /android/data/misc/adb");
         lines.Add($"echo \"{policy.AdbPublicKey}\" > /android/data/misc/adb/adb_keys");
         lines.Add("chown -R 2000:2000 /android/data/misc/adb");
@@ -536,16 +786,11 @@ public sealed class InitrdCustomizerService
         lines.Add("chmod 0640 /android/data/misc/adb/adb_keys");
         lines.Add("echo \"host ADB key planted in /data/misc/adb/adb_keys\"");
         lines.Add("");
-        lines.Add("# 以 chroot 而非 switch_root 交接，/android 挂载点继续可见，");
-        lines.Add("# 下面的辅助进程才能访问 guest 的 /data。");
+
         lines.Add("SWITCH=chroot");
         lines.Add("");
-        lines.Add("# 辅助进程：等待 APEX 挂载出现后从其中拉起 adbd。");
-        lines.Add("# 该镜像不在 /system/bin 提供 adbd，也没有对应的 init.rc 服务；");
-        lines.Add("# 二进制只存在于 adbd APEX 挂载点，由 apexd 在属性服务发布之后才拉起。");
-        lines.Add("# 辅助进程运行在 initramfs 的命名空间内，因此 guest 路径一律经由 /android 访问，");
-        lines.Add("# 二进制也通过 chroot 启动。");
 
+        // 辅助进程：APEX adbd 与运行时 setprop
         if (policy.EnableRoot)
         {
             lines.Add("( i=0");
@@ -553,6 +798,10 @@ public sealed class InitrdCustomizerService
             lines.Add("\t[ -e /android/dev/socket/property_service ] && break");
             lines.Add("\tsleep 1; i=$((i + 1))");
             lines.Add("  done");
+            if (policy.RootStealth)
+            {
+                lines.Add($"  chroot /android /system/bin/setprop service.adb.tcp.port {adbGuestPort.ToString(CultureInfo.InvariantCulture)} 2>&1");
+            }
             lines.Add("  chroot /android /system/bin/setprop service.adb.root 1 2>&1");
             lines.Add("  echo \"service.adb.root = `chroot /android /system/bin/getprop service.adb.root 2>/dev/null`\"");
             lines.Add("");
@@ -563,6 +812,9 @@ public sealed class InitrdCustomizerService
             lines.Add("  done");
             lines.Add("  echo \"APEX adbd appeared after ${k}s, launching it as uid `id -u`\"");
             lines.Add($"  if [ -x /android{apex}/bin/adbd ]; then");
+            lines.Add("\twhile read -r _pfx _k _v; do");
+            lines.Add("\t  [ \"$_pfx\" = \"export\" ] && eval \"export $_k=\\\"$_v\\\"\"");
+            lines.Add("\tdone < /android/init.environ.rc 2>/dev/null");
             lines.Add($"\tLD_LIBRARY_PATH={apex}/lib64:/system/lib64 \\");
             lines.Add($"\t  chroot /android {apex}/bin/adbd > /android/data/adbd-start.log 2>&1 &");
             lines.Add("\tsleep 5");
@@ -581,6 +833,9 @@ public sealed class InitrdCustomizerService
             lines.Add("  done");
             lines.Add("  echo \"APEX adbd appeared after ${i}s, launching it\"");
             lines.Add($"  if [ -x /android{apex}/bin/adbd ]; then");
+            lines.Add("\twhile read -r _pfx _k _v; do");
+            lines.Add("\t  [ \"$_pfx\" = \"export\" ] && eval \"export $_k=\\\"$_v\\\"\"");
+            lines.Add("\tdone < /android/init.environ.rc 2>/dev/null");
             lines.Add($"\tLD_LIBRARY_PATH={apex}/lib64:/system/lib64 \\");
             lines.Add($"\t  chroot /android {apex}/bin/adbd > /android/data/adbd-start.log 2>&1 &");
             lines.Add("\tsleep 5");
@@ -591,12 +846,29 @@ public sealed class InitrdCustomizerService
             lines.Add(") &");
         }
 
+        // A-05 / S-3: Android ID 落地与回读（无基带时不碰 IMEI）
+        if (policy.EnableAndroidIdProvisioning && !string.IsNullOrWhiteSpace(policy.TargetAndroidId))
+        {
+            string targetAid = policy.TargetAndroidId.Trim();
+            lines.Add("");
+            lines.Add("# --- 抗取证：Android ID 消费与回读 (A-05/S-3) ---------------");
+            lines.Add("( b=0");
+            lines.Add("  while [ $b -lt 300 ]; do");
+            lines.Add("\t[ \"`chroot /android /system/bin/getprop sys.boot_completed 2>/dev/null`\" = \"1\" ] && break");
+            lines.Add("\tsleep 1; b=$((b + 1))");
+            lines.Add("  done");
+            lines.Add($"  chroot /android /system/bin/settings put secure android_id \"{targetAid}\" 2>&1");
+            lines.Add("  actual_aid=`chroot /android /system/bin/settings get secure android_id 2>/dev/null`");
+            lines.Add($"  echo \"android_id: target={targetAid} actual=$actual_aid\" > /android/data/android_id.log");
+            lines.Add("  echo \"settings android_id applied and verified\"");
+            lines.Add(") &");
+        }
+
+        // 模块加载器
         if (policy.EnableModuleLoader)
         {
             lines.Add("");
             lines.Add("# 辅助进程：开机加载持久化 /data 分区上的模块 (/data/adb/modules)。");
-            lines.Add("# initramfs 以 uid 0 运行，/android 是后续挂载到 / 的 loop mount，");
-            lines.Add("# 将模块的 system/ 子树 overlay 进去，并执行各阶段脚本。");
             lines.Add("( n=0");
             lines.Add("  while [ $n -lt 600 ]; do");
             lines.Add("\t[ -e /android/dev/socket/property_service ] && break");
@@ -645,8 +917,6 @@ public sealed class InitrdCustomizerService
 
     /// <summary>
     /// 读取 initrd 文件中内嵌的策略指纹。
-    /// 指纹标记位于注入块内，只看文件头无法判定，必须解压解包到根脚本。
-    /// 无法解析时返回 null，表示该文件不是定制产物，由调用方按原版处理。
     /// </summary>
     /// <param name="initrdPath">initrd 文件路径。</param>
     /// <returns>内嵌指纹；文件不是定制产物时返回 null。</returns>
@@ -677,12 +947,10 @@ public sealed class InitrdCustomizerService
         }
         catch (XBearException)
         {
-            // 结构异常时无法判定是否已定制，交由后续定制流程报出真实原因。
             return null;
         }
         catch (IOException)
         {
-            // 同上，读取失败不应在此处转换成另一个语义的错误。
             return null;
         }
     }
@@ -710,8 +978,7 @@ public sealed class InitrdCustomizerService
     }
 
     /// <summary>
-    /// 读取宿主 ADB 公钥。文件缺失时不代为生成：密钥归属是用户决策，
-    /// 产品不得在用户不知情的情况下创建可用身份凭证。
+    /// 读取宿主 ADB 公钥。
     /// </summary>
     /// <returns>公钥文本。</returns>
     private string ReadHostAdbPublicKey()
@@ -759,8 +1026,7 @@ public sealed class InitrdCustomizerService
     }
 
     /// <summary>
-    /// 确保原版 initrd 已留档。留档存在即视为可信来源，不重复覆盖：
-    /// 覆盖会把定制产物误当作原版，导致后续定制在已定制的产物上二次施加。
+    /// 确保原版 initrd 已留档。
     /// </summary>
     /// <param name="initrdPath">initrd 文件路径。</param>
     /// <param name="stockPath">原版留档路径。</param>
@@ -799,30 +1065,28 @@ public sealed class InitrdCustomizerService
         }
         catch (IOException)
         {
-            // 临时文件残留不影响定制结果，留待系统清理。
         }
         catch (UnauthorizedAccessException)
         {
-            // 同上。
         }
     }
 
-    /// <summary>
-    /// 清除目标文件的只读属性。
-    /// 引导资产可能来自带只读位的发行介质，覆盖前必须先解除，否则替换会以权限错误失败。
-    /// </summary>
-    /// <param name="path">目标文件路径。</param>
+    /// <summary>清除文件只读属性。</summary>
+    /// <param name="path">文件路径。</param>
     private static void ClearReadOnly(string path)
     {
-        if (!File.Exists(path))
+        try
         {
-            return;
+            if (File.Exists(path))
+            {
+                File.SetAttributes(path, FileAttributes.Normal);
+            }
         }
-
-        FileAttributes attributes = File.GetAttributes(path);
-        if ((attributes & FileAttributes.ReadOnly) != 0)
+        catch (IOException)
         {
-            File.SetAttributes(path, attributes & ~FileAttributes.ReadOnly);
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 }

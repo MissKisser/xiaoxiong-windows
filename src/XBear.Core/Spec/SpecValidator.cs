@@ -167,6 +167,124 @@ public sealed class SpecValidator
         ValidateAgainst(SpecLoader.TerminologySchemaFileName, json);
 
     /// <summary>
+    /// 校验设备身份 JSON。
+    /// </summary>
+    /// <param name="json">设备身份 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateIdentity(string json) =>
+        ValidateAgainst(SpecLoader.IdentitySchemaFileName, json);
+
+    /// <summary>
+    /// 校验检测面指标台账 JSON。先过 Schema，再逐项核对审计来源与状态回填纪律：
+    /// Schema 能约束字段形态，但「每条指标都必须能回溯到审计发现」
+    /// 与「反向指标必须守住具体能力」属于语义要求，只能在强类型模型上核对。
+    /// </summary>
+    /// <param name="json">检测面指标台账 JSON 文本。</param>
+    /// <returns>结构化校验结果。</returns>
+    public ValidationResult ValidateDetectionSurface(string json)
+    {
+        var errors = new List<ValidationError>(
+            _evaluator.Evaluate(
+                _loader.ReadSchemaText(SpecLoader.DetectionSurfaceSchemaFileName),
+                json,
+                SpecLoader.DetectionSurfaceSchemaFileName));
+
+        var surface = _loader.ParseDetectionSurface(json);
+
+        RequireSemanticVersion(errors, "/version", surface.Version);
+        RequireText(errors, "/semantics/subject", surface.Semantics.Subject, "检测面测什么");
+        RequireText(errors, "/semantics/stateDirection", surface.Semantics.StateDirection, "检测面通过方向");
+        RequireText(errors, "/semantics/carrier", surface.Semantics.Carrier, "检测面载体位置");
+        RequireText(errors, "/semantics/admission", surface.Semantics.Admission, "检测面未通过时的处置");
+        RequireText(errors, "/execution/scope", surface.Execution.Scope, "检测面执行域");
+        RequireText(errors, "/execution/placeholder", surface.Execution.Placeholder, "检测面占位符写法");
+
+        if (surface.FillPolicy.Count == 0)
+        {
+            errors.Add(new ValidationError("/fillPolicy", "检测面台账未声明任何状态回填纪律", "/fillPolicy"));
+        }
+
+        if (surface.Groups.Count == 0)
+        {
+            errors.Add(new ValidationError("/groups", "检测面台账未声明任何指标组", "/groups"));
+        }
+
+        var groupIds = new HashSet<string>(StringComparer.Ordinal);
+        var metricIds = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var g = 0; g < surface.Groups.Count; g++)
+        {
+            var group = surface.Groups[g];
+            var groupPath = $"/groups/{g}";
+
+            RequireText(errors, $"{groupPath}/id", group.Id, "指标组标识");
+            RequireText(errors, $"{groupPath}/name", group.Name, "指标组名称");
+
+            if (!string.IsNullOrWhiteSpace(group.Id) && !groupIds.Add(group.Id))
+            {
+                errors.Add(new ValidationError($"{groupPath}/id", $"指标组标识 {group.Id} 重复", $"{groupPath}/id"));
+            }
+
+            if (group.Metrics.Count == 0)
+            {
+                errors.Add(new ValidationError($"{groupPath}/metrics", "指标组未声明任何指标", $"{groupPath}/metrics"));
+            }
+
+            for (var i = 0; i < group.Metrics.Count; i++)
+            {
+                var metric = group.Metrics[i];
+                var path = $"{groupPath}/metrics/{i}";
+
+                RequireText(errors, $"{path}/id", metric.Id, "指标标识");
+                RequireText(errors, $"{path}/name", metric.Name, "指标检查项");
+                RequireText(errors, $"{path}/command", metric.Command, "检测命令");
+                RequireText(errors, $"{path}/expected", metric.Expected, "期望结果");
+
+                // 指标标识空间独立于审计发现编号空间，两者不可混用。
+                if (!string.IsNullOrWhiteSpace(metric.Id) && !metricIds.Add(metric.Id))
+                {
+                    errors.Add(new ValidationError($"{path}/id", $"指标标识 {metric.Id} 重复", $"{path}/id"));
+                }
+
+                if (metric.AuditRefs.Count == 0)
+                {
+                    errors.Add(new ValidationError(
+                        $"{path}/auditRefs",
+                        $"指标 {metric.Id} 未锚定任何审计发现，不允许出现没有审计来源的指标",
+                        $"{path}/auditRefs"));
+                }
+
+                for (var r = 0; r < metric.AuditRefs.Count; r++)
+                {
+                    RequireText(errors, $"{path}/auditRefs/{r}", metric.AuditRefs[r], "审计发现编号");
+                }
+
+                // 反向指标的 pass 表示功能正常，因此必须写明它守住的是哪项能力。
+                if (metric.ReverseFunctional)
+                {
+                    RequireText(errors, $"{path}/expected", metric.Expected, "反向功能指标的判据");
+                }
+
+                // 状态脱离 untested 时必须给出实测时刻与证据，否则该结论无法复核。
+                if (metric.Status != DetectionMetricStatus.Untested)
+                {
+                    RequireText(errors, $"{path}/measuredAt", metric.MeasuredAt, "实测时刻");
+                    RequireText(errors, $"{path}/evidence", metric.Evidence, "实测证据");
+                }
+                else if (!string.IsNullOrWhiteSpace(metric.MeasuredAt))
+                {
+                    errors.Add(new ValidationError(
+                        $"{path}/measuredAt",
+                        $"指标 {metric.Id} 状态为 untested 时不得携带实测时刻",
+                        $"{path}/measuredAt"));
+                }
+            }
+        }
+
+        return new ValidationResult(SpecLoader.DetectionSurfaceSchemaFileName, errors);
+    }
+
+    /// <summary>
     /// 校验快照元数据 JSON。
     /// </summary>
     /// <param name="json">快照元数据 JSON 文本。</param>
@@ -414,6 +532,10 @@ public sealed class SpecValidator
                 _loader.ParseApplication(json);
                 break;
 
+            case SpecLoader.IdentitySchemaFileName:
+                _loader.ParseIdentity(json);
+                break;
+
             default:
                 _loader.ParseInstance(json);
                 break;
@@ -464,6 +586,7 @@ public sealed class SpecValidator
         ("filetransfer", SpecLoader.FileTransferSchemaFileName),
         ("module", SpecLoader.ModuleSchemaFileName),
         ("application", SpecLoader.ApplicationSchemaFileName),
+        ("identity", SpecLoader.IdentitySchemaFileName),
     };
 
     private static void RequireText(

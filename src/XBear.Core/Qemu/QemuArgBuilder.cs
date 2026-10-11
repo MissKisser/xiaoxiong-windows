@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using XBear.Core.Abstractions;
 using XBear.Core.Diagnostics;
+using XBear.Core.Identity;
 using XBear.Core.Spec;
 
 namespace XBear.Core.Qemu;
@@ -84,6 +85,28 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
     private const string NetworkDeviceId = "net0";
     private const string QemuUserNetPrefix = "user";
 
+    /// <summary>
+    /// 实例未声明机型族时，按实例标识确定性选取网段所用的地址池。
+    /// 取 RFC 1918 私有段中避开 172.17.0.0/16 的部分：宿主网络仿真的默认网段本身
+    /// 是可被交叉校验命中的暴露面，实例默认网段必须落在与默认值不同的段上。
+    /// </summary>
+    private static readonly byte[] SubnetSecondOctets = BuildSubnetSecondOctets();
+
+    /// <summary>确定性网段派生时实例地址在段内的固定偏移。</summary>
+    private const byte GuestAddressFourthOctet = 15;
+
+    /// <summary>网关在段内的固定偏移。</summary>
+    private const byte GatewayFourthOctet = 2;
+
+    /// <summary>域名解析服务在段内的固定偏移。</summary>
+    private const byte DnsFourthOctet = 3;
+
+    /// <summary>动态地址分配在段内的起始偏移，与固定地址刻意错开。</summary>
+    private const byte DhcpStartFourthOctet = 20;
+
+    /// <summary>未声明前缀长度时使用的默认前缀。</summary>
+    private const int DefaultPrefixLength = 24;
+
     private readonly AcceleratorOptions _accelerator;
 
     /// <summary>
@@ -111,11 +134,17 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         new(@"^[A-Za-z0-9._+,\-=]+$", RegexOptions.CultureInvariant);
 
     /// <summary>
-    /// 已实测验证可引导目标镜像的 CPU 型号集合。
+    /// 已实测验证可引导目标镜像的处理器型号集合。
     /// 集合之外一律拒绝，避免把未经验证的选型交给用户在启动失败后自行排查。
     /// </summary>
     private static readonly HashSet<string> VerifiedCpuModels =
-        new(StringComparer.OrdinalIgnoreCase) { PlatformDefaultCpuModel };
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            PlatformDefaultCpuModel,
+            CpuModelSelection.Vibe12CpuModel,
+            CpuModelSelection.Nova8CpuModel,
+            CpuModelSelection.Edge7CpuModel,
+        };
 
     /// <summary>已确认缺少 <see cref="RequiredCpuFeature"/> 的型号，这些型号会被引导程序判定为不支持而主动中止引导。</summary>
     private static readonly HashSet<string> ModelsMissingRequiredFeature =
@@ -127,13 +156,43 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
     public static string ResolveAccelerator(bool whpxAvailable)
         => whpxAvailable ? WhpxAccelerator : TcgAccelerator;
 
-    /// <summary>解析实例将实际使用的 CPU 型号，未声明时回落到平台默认选型。</summary>
-    /// <param name="declaredCpuModel">实例声明的 CPU 型号，可为空。</param>
+/// <summary>解析实例将实际使用的处理器型号，未声明时回落到平台默认选型。</summary>
+    /// <param name="declaredCpuModel">实例声明的处理器型号，可为空。</param>
     /// <returns>去掉首尾空白后的型号；声明为空或仅含空白时返回 <see cref="PlatformDefaultCpuModel"/>。</returns>
-    public static string ResolveCpuModel(string? declaredCpuModel)
-        => string.IsNullOrWhiteSpace(declaredCpuModel)
+    public static string ResolveCpuModel(string? declaredCpuModel) =>
+        string.IsNullOrWhiteSpace(declaredCpuModel)
             ? PlatformDefaultCpuModel
             : declaredCpuModel.Trim();
+
+    /// <summary>
+    /// 按机型族画像解析处理器型号。实例显式声明时以声明为准；
+    /// 未声明时按机型族画像选型；两者都缺失时回落到平台默认选型。
+    /// 选型之后一律附加关闭虚拟化特征的特性后缀。
+    /// </summary>
+    /// <param name="declaredCpuModel">实例声明的处理器型号，可为空。</param>
+    /// <param name="profile">机型族画像，可为空。</param>
+    /// <returns>可直接作为 -cpu 取值的完整型号串。</returns>
+    /// <exception cref="XBearException">型号不可用时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    public static string ResolveCpuModelForProfile(string? declaredCpuModel, DeviceProfile? profile)
+    {
+        string model;
+
+        if (!string.IsNullOrWhiteSpace(declaredCpuModel))
+        {
+            model = declaredCpuModel.Trim();
+        }
+        else if (profile is not null)
+        {
+            model = CpuModelSelection.ForProfile(profile.ProfileId);
+        }
+        else
+        {
+            model = PlatformDefaultCpuModel;
+        }
+
+        ValidateCpuModel(model);
+        return CpuModelSelection.WithSuppressedVirtualization(model);
+    }
 
     /// <summary>
     /// 校验 CPU 型号是否满足目标镜像的启动前置条件，为不依赖文件系统与进程的纯函数。
@@ -197,9 +256,6 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
     }
 
 
-    private static readonly Regex FixedAddressPattern =
-        new(@"^10\.0\.2\.[0-9]{1,3}$", RegexOptions.CultureInvariant);
-
     private static readonly string[] BlissDevices =
     {
         "virtio-gpu-pci",
@@ -261,8 +317,10 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         ValidatePort(ports.Qmp, nameof(ports.Qmp));
         ValidatePort(ports.Vnc, nameof(ports.Vnc));
 
-        var cpuModel = ResolveCpuModel(spec.Resources.CpuModel);
-        ValidateCpuModel(cpuModel);
+        // 机型族画像在参数生成阶段一并解析：DMI、系统属性与构建指纹都由它派生，
+        // 参数拼装不得绕开它就地拼字符串。
+        DeviceProfile? profile = TryResolveProfile(spec);
+        string cpuModel = ResolveCpuModelForProfile(spec.Resources.CpuModel, profile);
 
         var arguments = new List<string>
         {
@@ -291,21 +349,17 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
             BuildVncDisplay(spec.Network?.Exposure, ports.Vnc),
         };
 
-        // 磁盘引导没有 -kernel，QEMU 会在启动前直接拒绝 -append，因此标识只经 DMI 下发序列号。
-        string? smbiosSerial = DeviceIdentityChannels.BuildSmbiosSerialEntry(spec.DeviceIdentity);
-        if (smbiosSerial is not null)
-        {
-            arguments.Add("-smbios");
-            arguments.Add(smbiosSerial);
-        }
+        AppendSmbiosArguments(spec, profile, arguments);
 
         AppendKernelBootArguments(spec, image, arguments);
 
+        string? mac = ResolveMac(spec);
+
         arguments.Add("-netdev");
-        arguments.Add(BuildNetDev(spec.Network, ports.Adb));
+        arguments.Add(BuildNetDev(spec, mac, ports.Adb));
 
         arguments.Add("-device");
-        arguments.Add($"virtio-net-pci,netdev={NetworkDeviceId}");
+        arguments.Add(BuildNetDevice(mac));
 
         foreach (var device in BlissDevices)
         {
@@ -314,6 +368,96 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         }
 
         return arguments;
+    }
+
+    /// <summary>
+    /// 解析实例绑定的机型族画像。实例未绑定画像时返回 null，
+    /// 此时只下发标识通道的必填项，不产出机型族派生条目。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>绑定的机型族画像，未绑定时为 null。</returns>
+    private static DeviceProfile? TryResolveProfile(InstanceSpec spec)
+    {
+        string? declared = spec.DeviceIdentity?.DeviceProfileId;
+        if (string.IsNullOrWhiteSpace(declared))
+        {
+            return null;
+        }
+
+        return DeviceProfileCatalog.Require(declared.Trim());
+    }
+
+    /// <summary>
+    /// 追加 DMI/SMBIOS 条目。机型族画像与设备身份同时具备时全量下发；
+    /// 缺任一者时按标识通道的最小形态下发序列号，其余条目一律省略，
+    /// 不得让机型族画像的缺失退化成宿主仿真器的默认机型串。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <param name="profile">机型族画像，未绑定时为 null。</param>
+    /// <param name="arguments">待追加的参数序列。</param>
+    private static void AppendSmbiosArguments(
+        InstanceSpec spec,
+        DeviceProfile? profile,
+        List<string> arguments)
+    {
+        var identity = spec.DeviceIdentity;
+
+        if (profile is not null && identity is not null)
+        {
+            foreach (var entry in SmbiosProfileBuilder.BuildEntries(profile, identity))
+            {
+                arguments.Add("-smbios");
+                arguments.Add(entry);
+            }
+
+            return;
+        }
+
+        string? serialEntry = DeviceIdentityChannels.BuildSmbiosSerialEntry(identity);
+        if (serialEntry is not null)
+        {
+            arguments.Add("-smbios");
+            arguments.Add(serialEntry);
+        }
+    }
+
+    /// <summary>
+    /// 解析实例的网卡 MAC。已声明时按契约校验；未声明且机型族画像与序列号齐备时确定性派生。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>网卡 MAC，无从解析时为 null。</returns>
+    /// <exception cref="XBearException">声明的 MAC 不满足契约时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    private static string? ResolveMac(InstanceSpec spec)
+    {
+        var identity = spec.DeviceIdentity;
+        if (identity is null)
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrWhiteSpace(identity.Mac))
+        {
+            var declared = identity.Mac.Trim();
+            if (!MacAddress.IsValid(declared))
+            {
+                throw new XBearException(
+                    ErrorCategory.Spec,
+                    $"网卡 MAC {declared} 不满足契约。",
+                    "MAC 必须为六字节小写十六冒号分隔、非全零、且首字节最低位为 0（单播方向）；请修正实例配置后重试。");
+            }
+
+            return declared;
+        }
+
+        if (string.IsNullOrWhiteSpace(identity.SerialNo))
+        {
+            return null;
+        }
+
+        var profile = TryResolveProfile(spec);
+        return profile is null
+            ? null
+            : MacAddress.Derive(profile, identity.SerialNo);
     }
 
     /// <summary>
@@ -466,29 +610,28 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         return declared is null ? DefaultKernelAppendSkeleton : declared.Trim();
     }
 
-    /// <summary>组装用户态 NAT 网络设备串，除用户配置的映射外固定附带 adb 转发。</summary>
-    /// <param name="network">实例网络配置，可为空，空值按缺省回环暴露处理。</param>
+    /// <summary>
+    /// 组装用户态 NAT 网络设备串。除用户配置的映射外固定附带 adb 转发，
+    /// 并把网段、网关、域名解析服务与动态地址起始一并显式下发。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <param name="mac">实例身份派生的网卡 MAC，可为空。</param>
     /// <param name="adbHostPort">宿主侧分配到的 adb 端口。</param>
     /// <returns>-netdev 参数值。</returns>
     /// <exception cref="XBearException">固定地址不符合契约时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
-    private static string BuildNetDev(NetworkSpec? network, int adbHostPort)
+    private static string BuildNetDev(InstanceSpec spec, string? mac, int adbHostPort)
     {
+        var network = spec.Network;
         var parts = new List<string> { QemuUserNetPrefix, $"id={NetworkDeviceId}" };
 
-        var fixedAddress = network?.FixedAddress;
-        if (!string.IsNullOrWhiteSpace(fixedAddress))
-        {
-            var trimmed = fixedAddress.Trim();
-            if (!FixedAddressPattern.IsMatch(trimmed))
-            {
-                throw new XBearException(
-                    ErrorCategory.Spec,
-                    $"固定地址 {trimmed} 不符合 10.0.2.x 段约定。",
-                    "请把 network.fixedAddress 改为 10.0.2.2 至 10.0.2.254 之间的地址。");
-            }
+        var plan = ResolveNetworkPlan(spec);
 
-            parts.Add($"net={trimmed}/24");
-        }
+        parts.Add($"net={plan.Address}/{plan.PrefixLength}");
+        parts.Add($"host={plan.Gateway}");
+        parts.Add($"dns={plan.Dns}");
+        parts.Add($"dhcpstart={plan.DhcpStart}");
+        parts.Add($"domainname={plan.DomainName}");
+        parts.Add($"dnssearch={plan.DomainName}");
 
         var forwards = network?.PortForwards;
         if (forwards is not null)
@@ -501,6 +644,229 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
 
         parts.Add(BuildAdbHostForward(network, adbHostPort));
         return string.Join(",", parts);
+    }
+
+    /// <summary>
+    /// 组装网卡设备串，携带实例身份派生的 MAC。
+    /// </summary>
+    /// <param name="mac">网卡 MAC，可为空，为空时省略该键并由宿主网络仿真自行分配。</param>
+    /// <returns>-device 参数值。</returns>
+    private static string BuildNetDevice(string? mac) =>
+        string.IsNullOrWhiteSpace(mac)
+            ? $"virtio-net-pci,netdev={NetworkDeviceId}"
+            : $"virtio-net-pci,netdev={NetworkDeviceId},mac={mac}";
+
+    /// <summary>
+    /// 解析实例的默认路由网关地址。
+    /// 供 initrd 网络收敛与默认路由补齐时使用，与宿主 QEMU 网络仿真的 host 参数保持同源。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>默认路由网关 IPv4 地址。</returns>
+    public static string ResolveDefaultGateway(InstanceSpec spec)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        return ResolveNetworkPlan(spec).Gateway;
+    }
+
+    /// <summary>
+    /// 解析实例的网段方案。实例显式声明固定地址时以声明为准，
+    /// 未声明时按实例标识确定性选取一段地址，避免落在宿主网络仿真的默认段上。
+    /// </summary>
+    /// <param name="spec">实例配置。</param>
+    /// <returns>网段方案。</returns>
+    /// <exception cref="XBearException">固定地址不符合契约时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    private static NetworkPlan ResolveNetworkPlan(InstanceSpec spec)
+    {
+        var declared = spec.Network?.FixedAddress;
+
+        if (!string.IsNullOrWhiteSpace(declared))
+        {
+            return NetworkPlan.FromFixedAddress(declared.Trim());
+        }
+
+        return NetworkPlan.FromInstanceId(spec.Id);
+    }
+
+    /// <summary>
+    /// 一段地址的完整方案：实例地址、网关、域名解析服务、动态地址起始与搜索域。
+    /// </summary>
+    /// <param name="Address">实例固定地址。</param>
+    /// <param name="PrefixLength">前缀长度。</param>
+    /// <param name="Gateway">默认路由网关。</param>
+    /// <param name="Dns">域名解析服务地址。</param>
+    /// <param name="DhcpStart">动态地址分配起始地址。</param>
+    /// <param name="DomainName">搜索域。</param>
+    private sealed record NetworkPlan(
+        string Address,
+        int PrefixLength,
+        string Gateway,
+        string Dns,
+        string DhcpStart,
+        string DomainName)
+    {
+        /// <summary>缺省搜索域，取宿主名解析的本地域。</summary>
+        private const string LocalDomainName = "local";
+
+        /// <summary>
+        /// 由实例显式声明的固定地址构造方案。声明只给出地址或地址加前缀，
+        /// 其余取同一网段内的固定偏移，与显式声明保持自洽。
+        /// </summary>
+        /// <param name="fixedAddress">固定地址，形如 IPv4 或 IPv4 加前缀长度。</param>
+        /// <returns>网段方案。</returns>
+        /// <exception cref="XBearException">地址不符合契约时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+        public static NetworkPlan FromFixedAddress(string fixedAddress)
+        {
+            var parsed = ParseAddress(fixedAddress);
+            var octets = parsed.Octets;
+
+            return new NetworkPlan(
+                fixedAddress,
+                parsed.PrefixLength,
+                $"{octets[0]}.{octets[1]}.{octets[2]}.{GatewayFourthOctet}",
+                $"{octets[0]}.{octets[1]}.{octets[2]}.{DnsFourthOctet}",
+                $"{octets[0]}.{octets[1]}.{octets[2]}.{DhcpStartFourthOctet}",
+                LocalDomainName);
+        }
+
+        /// <summary>
+        /// 按实例标识确定性选取一段地址。同一实例跨重启取到同一段，
+        /// 不同实例之间尽量分散：地址随启动顺序漂移会让实例地址本身成为异常特征。
+        /// </summary>
+        /// <param name="instanceId">实例标识。</param>
+        /// <returns>网段方案。</returns>
+        public static NetworkPlan FromInstanceId(string instanceId)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
+
+            // FNV-1a：跨进程与跨运行稳定的确定性散列。
+            const uint OffsetBasis = 2166136261;
+            const uint Prime = 16777619;
+
+            uint hash = OffsetBasis;
+            foreach (var character in instanceId)
+            {
+                hash ^= character;
+                hash *= Prime;
+            }
+
+            int secondOctetIndex = (int)(hash % (uint)SubnetSecondOctets.Length);
+            int thirdOctet = (int)((hash >> 8) % 256);
+
+            byte secondOctet = SubnetSecondOctets[secondOctetIndex];
+
+            return new NetworkPlan(
+                $"172.{secondOctet}.{thirdOctet}.{GuestAddressFourthOctet}",
+                DefaultPrefixLength,
+                $"172.{secondOctet}.{thirdOctet}.{GatewayFourthOctet}",
+                $"172.{secondOctet}.{thirdOctet}.{DnsFourthOctet}",
+                $"172.{secondOctet}.{thirdOctet}.{DhcpStartFourthOctet}",
+                LocalDomainName);
+        }
+
+        private static (byte[] Octets, int PrefixLength) ParseAddress(string fixedAddress)
+        {
+            var segments = fixedAddress.Split('/');
+            if (segments.Length > 2)
+            {
+                throw new XBearException(
+                    ErrorCategory.Spec,
+                    $"固定地址 {fixedAddress} 不是 IPv4 地址或 IPv4 地址加前缀的形式。",
+                    "请把 network.fixedAddress 形如 192.168.77.15 或 192.168.77.15/24 的取值。");
+            }
+
+            if (!TryParsePrefixLength(segments.Length > 1 ? segments[1] : null, out int prefixLength))
+            {
+                throw new XBearException(
+                    ErrorCategory.Spec,
+                    $"固定地址 {fixedAddress} 的前缀长度非法。",
+                    "前缀长度必须为 0 到 32 之间的十进制整数，不带前导零。");
+            }
+
+            var octetStrings = segments[0].Split('.');
+            if (octetStrings.Length != 4)
+            {
+                throw new XBearException(
+                    ErrorCategory.Spec,
+                    $"固定地址 {fixedAddress} 不是四段式 IPv4 地址。",
+                    "请把 network.fixedAddress 形如 192.168.77.15 或 192.168.77.15/24 的取值。");
+            }
+
+            var octets = new byte[4];
+            for (var i = 0; i < octetStrings.Length; i++)
+            {
+                octets[i] = ParseOctet(octetStrings[i], fixedAddress);
+            }
+
+            return (octets, prefixLength);
+        }
+
+        private static byte ParseOctet(string value, string fixedAddress)
+        {
+            // 各段必须是不带前导零的十进制整数：前导零会让同一地址出现多种文本形态，
+            // 256 以上的取值则是越界值，两者都必须当场拒绝而不是截断后继续用。
+            if (value.Length is 0 or > 3 ||
+                (value.Length > 1 && value[0] == '0') ||
+                !value.All(char.IsAsciiDigit))
+            {
+                throw new XBearException(
+                    ErrorCategory.Spec,
+                    $"固定地址 {fixedAddress} 的第 {Array.IndexOf(fixedAddress.Split('.'), value) + 1} 段 {value} 不是合法段值。",
+                    "每段必须为 1 到 3 位十进制整数且不带前导零，取值不超过 255。");
+            }
+
+            if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out int parsed) ||
+                parsed is < 0 or > 255)
+            {
+                throw new XBearException(
+                    ErrorCategory.Spec,
+                    $"固定地址 {fixedAddress} 的段值 {value} 越界。",
+                    "每段必须为 1 到 3 位十进制整数且不带前导零，取值不超过 255。");
+            }
+
+            return (byte)parsed;
+        }
+
+        private static bool TryParsePrefixLength(string? value, out int prefixLength)
+        {
+            prefixLength = DefaultPrefixLength;
+
+            if (value is null)
+            {
+                return true;
+            }
+
+            if (value.Length is 0 or > 2 ||
+                (value.Length > 1 && value[0] == '0') ||
+                !value.All(char.IsAsciiDigit))
+            {
+                return false;
+            }
+
+            if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out prefixLength))
+            {
+                return false;
+            }
+
+            return prefixLength is >= 0 and <= 32;
+        }
+    }
+
+    /// <summary>
+    /// 构造确定性网段派生所用的第二段取值集合。取私有地址段并避开
+    /// 172.17.0.0/16——该段常被宿主容器网络占用，落在其上会让实例网络配置依赖宿主环境。
+    /// </summary>
+    /// <returns>第二段取值序列。</returns>
+    private static byte[] BuildSubnetSecondOctets()
+    {
+        const byte PrivateSecondOctetFloor = 16;
+        const byte PrivateSecondOctetCeiling = 31;
+        const byte ReservedContainerSecondOctet = 17;
+
+        return Enumerable
+            .Range(PrivateSecondOctetFloor, PrivateSecondOctetCeiling - PrivateSecondOctetFloor + 1)
+            .Select(value => (byte)value)
+            .Where(value => value != ReservedContainerSecondOctet)
+            .ToArray();
     }
 
     /// <summary>

@@ -149,7 +149,9 @@ public sealed class QemuArgBuilderTests
     {
         var arguments = CreateBuilder().BuildStartArguments(CreateSpec(), DiskPath, new AllocatedPorts(5555, 5556, 5900));
 
-        Assert.Equal("Skylake-Client", ReadValue(arguments, "-cpu"));
+        Assert.Equal(
+            "Skylake-Client,hypervisor=off,invpcid=off,fsgsbase=off,kvmclock=off,kvm-pv-eoi=off",
+            ReadValue(arguments, "-cpu"));
         Assert.Equal("4", ReadValue(arguments, "-smp"));
         Assert.Equal("4096", ReadValue(arguments, "-m"));
         Assert.Equal("none", ReadValue(arguments, "-display"));
@@ -378,11 +380,15 @@ public sealed class QemuArgBuilderTests
         Assert.DoesNotContain("tap", netDev, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void 固定地址不符合约定时抛出规格错误()
+    [Theory]
+    [InlineData("256.1.1.1")]
+    [InlineData("192.168.01.1")]
+    [InlineData("10.0.2.300")]
+    [InlineData("not-an-ip")]
+    public void 固定地址不符合约定时抛出规格错误(string invalidAddress)
     {
         var spec = CreateSpec();
-        spec.Network!.FixedAddress = "192.168.1.20";
+        spec.Network!.FixedAddress = invalidAddress;
 
         var exception = Assert.Throws<XBearException>(() =>
             CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900)));
@@ -501,7 +507,7 @@ public sealed class QemuArgBuilderTests
             $@"file={DiskPath},if=none,id={QemuArgBuilder.SystemDriveId},format=qcow2",
             ReadValue(arguments, "-drive"));
         Assert.Equal(
-            "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+            "user,id=net0,net=172.19.58.15/24,host=172.19.58.2,dns=172.19.58.3,dhcpstart=172.19.58.20,domainname=local,dnssearch=local,hostfwd=tcp:127.0.0.1:5555-:5555",
             ReadNetDev(arguments));
     }
 
@@ -520,7 +526,7 @@ public sealed class QemuArgBuilderTests
             $@"file=D:\xbear,,odd\overlay.qcow2,if=none,id={QemuArgBuilder.SystemDriveId},format=qcow2",
             ReadValue(arguments, "-drive"));
         Assert.Equal(
-            "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+            "user,id=net0,net=172.19.58.15/24,host=172.19.58.2,dns=172.19.58.3,dhcpstart=172.19.58.20,domainname=local,dnssearch=local,hostfwd=tcp:127.0.0.1:5555-:5555",
             ReadNetDev(arguments));
     }
 
@@ -540,7 +546,7 @@ public sealed class QemuArgBuilderTests
             $@"file=D:\xbear\odd\dir\a=b.qcow2,if=none,id={QemuArgBuilder.SystemDriveId},format=qcow2",
             ReadValue(arguments, "-drive"));
         Assert.Equal(
-            "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+            "user,id=net0,net=172.19.58.15/24,host=172.19.58.2,dns=172.19.58.3,dhcpstart=172.19.58.20,domainname=local,dnssearch=local,hostfwd=tcp:127.0.0.1:5555-:5555",
             ReadNetDev(arguments));
     }
 
@@ -559,7 +565,7 @@ public sealed class QemuArgBuilderTests
             $@"file=D:\xbear,,odd\dir\a=b.qcow2,if=none,id={QemuArgBuilder.SystemDriveId},format=qcow2",
             ReadValue(arguments, "-drive"));
         Assert.Equal(
-            "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+            "user,id=net0,net=172.19.58.15/24,host=172.19.58.2,dns=172.19.58.3,dhcpstart=172.19.58.20,domainname=local,dnssearch=local,hostfwd=tcp:127.0.0.1:5555-:5555",
             ReadNetDev(arguments));
     }
 
@@ -581,7 +587,7 @@ public sealed class QemuArgBuilderTests
             $@"file={DiskPath},if=none,id={QemuArgBuilder.SystemDriveId},format=qcow2",
             ReadValue(arguments, "-drive"));
         Assert.Equal(
-            "user,id=net0,net=10.0.2.15/24,hostfwd=tcp:0.0.0.0:6000-:6001,hostfwd=tcp:0.0.0.0:15555-:5555",
+            "user,id=net0,net=10.0.2.15/24,host=10.0.2.2,dns=10.0.2.3,dhcpstart=10.0.2.20,domainname=local,dnssearch=local,hostfwd=tcp:0.0.0.0:6000-:6001,hostfwd=tcp:0.0.0.0:15555-:5555",
             ReadNetDev(arguments));
     }
 
@@ -600,7 +606,7 @@ public sealed class QemuArgBuilderTests
                 "-accel",
                 $"{AcceleratorOptions.WhpxAccelerator},{AcceleratorOptions.DefaultWhpxOptions}",
                 "-cpu",
-                "Skylake-Client",
+                "Skylake-Client,hypervisor=off,invpcid=off,fsgsbase=off,kvmclock=off,kvm-pv-eoi=off",
                 "-smp",
                 "4",
                 "-m",
@@ -621,7 +627,7 @@ public sealed class QemuArgBuilderTests
                 "-vnc",
                 "127.0.0.1:0",
                 "-netdev",
-                "user,id=net0,hostfwd=tcp:127.0.0.1:5555-:5555",
+                "user,id=net0,net=172.19.58.15/24,host=172.19.58.2,dns=172.19.58.3,dhcpstart=172.19.58.20,domainname=local,dnssearch=local,hostfwd=tcp:127.0.0.1:5555-:5555",
                 "-device",
                 "virtio-net-pci,netdev=net0",
                 "-device",
@@ -1161,5 +1167,33 @@ public sealed class QemuArgBuilderTests
         var second = builder.BuildStartArguments(spec, image, DiskPath, ports);
 
         Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void ResolveDefaultGateway与NetDev参数同源一致()
+    {
+        var spec = CreateSpec("inst-gateway-test");
+        spec.Network!.FixedAddress = "192.168.88.10/24";
+
+        string gateway = QemuArgBuilder.ResolveDefaultGateway(spec);
+        Assert.Equal("192.168.88.2", gateway);
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+        string netdev = ReadNetDev(arguments);
+        Assert.Contains("host=192.168.88.2", netdev);
+    }
+
+    [Fact]
+    public void ResolveDefaultGateway未声明固定地址时从实例Id确定性计算()
+    {
+        var spec = CreateSpec("alpha");
+        string gateway = QemuArgBuilder.ResolveDefaultGateway(spec);
+
+        Assert.StartsWith("172.", gateway);
+        Assert.EndsWith(".2", gateway);
+
+        var arguments = CreateBuilder().BuildStartArguments(spec, DiskPath, new AllocatedPorts(5555, 5556, 5900));
+        string netdev = ReadNetDev(arguments);
+        Assert.Contains($"host={gateway}", netdev);
     }
 }

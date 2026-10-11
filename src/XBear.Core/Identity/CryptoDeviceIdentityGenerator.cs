@@ -15,6 +15,27 @@ public interface IDeviceIdentityGenerator
     /// </summary>
     /// <returns>新生成的标识组合。</returns>
     DeviceIdentity Next();
+
+    /// <summary>
+    /// 按指定机型族画像产出一组全新标识。机型族与序列号同源一次产出，
+    /// 使机型族画像、序列号与 MAC 天然出自同一次生成，不会出现画像与标识分属两处的分叉。
+    /// 默认实现复用 <see cref="Next()"/> 并在生成后补齐机型族标识与 MAC。
+    /// </summary>
+    /// <param name="profile">机型族画像，为 null 时按实例序号确定性选取。</param>
+    /// <param name="instanceOrdinal">实例在在册列表中的序号，用于未指定机型族时的确定性选取。</param>
+    /// <returns>新生成的标识组合。</returns>
+    DeviceIdentity Next(DeviceProfile? profile, int instanceOrdinal)
+    {
+        var identity = Next();
+        var resolved = profile ?? DeviceProfileCatalog.Select(instanceOrdinal);
+        identity.DeviceProfileId ??= resolved.ProfileId;
+        identity.IdentityVersion ??= IdentityContractVersions.Current;
+        if (string.IsNullOrWhiteSpace(identity.Mac) && !string.IsNullOrWhiteSpace(identity.SerialNo))
+        {
+            identity.Mac = MacAddress.Derive(resolved, identity.SerialNo);
+        }
+        return identity;
+    }
 }
 
 /// <summary>
@@ -54,6 +75,28 @@ public sealed class CryptoDeviceIdentityGenerator : IDeviceIdentityGenerator
         AndroidId = GenerateAndroidId(),
         Imei = GenerateImei(),
     };
+
+    /// <summary>
+    /// 按指定机型族画像产出一组全新标识：机型族画像、序列号、Android ID 与 MAC 同源一次产出。
+    /// </summary>
+    /// <param name="profile">机型族画像，为 null 时按实例序号确定性选取。</param>
+    /// <param name="instanceOrdinal">实例在在册列表中的序号，用于未指定机型族时的确定性选取。</param>
+    /// <returns>新生成的标识组合。</returns>
+    public DeviceIdentity Next(DeviceProfile? profile, int instanceOrdinal)
+    {
+        var resolved = profile ?? DeviceProfileCatalog.Select(instanceOrdinal);
+        string serialNo = GenerateSerialNo();
+
+        return new DeviceIdentity
+        {
+            SerialNo = serialNo,
+            AndroidId = GenerateAndroidId(),
+            Imei = GenerateImei(),
+            Mac = MacAddress.Derive(resolved, serialNo),
+            DeviceProfileId = resolved.ProfileId,
+            IdentityVersion = IdentityContractVersions.Current,
+        };
+    }
 
     /// <summary>
     /// 生成序列号，形如 XBSN 加 12 位大写十六进制。
@@ -103,4 +146,23 @@ public sealed class CryptoDeviceIdentityGenerator : IDeviceIdentityGenerator
 
         return new string(buffer);
     }
+}
+
+/// <summary>
+/// 设备身份契约版本。与共享规格的 spec.version 同源，
+/// 实例配置持久化该版本号，读入时若高于自身支持的版本按未识别处理并保留原始字段。
+/// </summary>
+public static class IdentityContractVersions
+{
+    /// <summary>当前产品支持的设备身份契约版本。</summary>
+    public const string Current = "1.0.0";
+
+    /// <summary>
+    /// 判断给定版本号是否为产品可识别的设备身份契约版本。
+    /// </summary>
+    /// <param name="version">实例配置中记录的契约版本，可为空。</param>
+    /// <returns>可识别时返回 true，为空表示未声明版本，按当前版本处理。</returns>
+    public static bool IsRecognized(string? version) =>
+        string.IsNullOrWhiteSpace(version) ||
+        string.Equals(version.Trim(), Current, StringComparison.Ordinal);
 }

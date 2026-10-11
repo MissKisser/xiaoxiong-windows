@@ -95,31 +95,61 @@ internal sealed class JsonNetSchemaEvaluator : ISchemaEvaluator
             return new List<ValidationError>();
         }
 
+        var validLocations = new HashSet<string>(StringComparer.Ordinal);
+        CollectValidLocations(results, validLocations);
+
         var errors = new List<ValidationError>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        Walk(results, errors, seen);
+        Walk(results, errors, seen, validLocations);
 
         return errors;
     }
 
-    private static void Walk(EvaluationResults node, List<ValidationError> errors, HashSet<string> seen)
+    private static void CollectValidLocations(EvaluationResults node, HashSet<string> validLocations)
     {
-        // 条件求值节点自身通过时，其子树内的失败只是条件不成立的探测噪声，契约仍为通过。
-        // 条件求值节点自身不通过才是真正的违规，此时照常报告并下探。
-        if (node.IsValid && IsProbeNode(node))
+        if (node.IsValid && node.SchemaLocation is { } loc)
+        {
+            var text = loc.ToString();
+            if (IsPropertyLocation(text))
+            {
+                validLocations.Add(text);
+            }
+        }
+
+        if (node.HasDetails)
+        {
+            foreach (var child in node.Details)
+            {
+                CollectValidLocations(child, validLocations);
+            }
+        }
+    }
+
+    private static bool IsPropertyLocation(string location)
+    {
+        var segments = location.Split('/');
+        return segments.Length >= 2 && segments[^2] == "properties";
+    }
+
+    private static void Walk(
+        EvaluationResults node,
+        List<ValidationError> errors,
+        HashSet<string> seen,
+        HashSet<string> validLocations)
+    {
+        if (node.IsValid)
         {
             return;
         }
 
-        if (!node.IsValid && node.HasErrors)
+        if (node.HasErrors && !IsUnderValidSchema(node, validLocations))
         {
             var path = node.InstanceLocation?.ToString() ?? string.Empty;
             var keyword = node.SchemaLocation?.ToString() ?? string.Empty;
 
             foreach (var entry in node.Errors ?? EmptyErrors)
             {
-                // entry.Key 为触发的关键字名，entry.Value 为失败原因。
                 var message = string.IsNullOrEmpty(entry.Key)
                     ? entry.Value
                     : $"{entry.Key}: {entry.Value}";
@@ -139,8 +169,27 @@ internal sealed class JsonNetSchemaEvaluator : ISchemaEvaluator
 
         foreach (var child in node.Details)
         {
-            Walk(child, errors, seen);
+            Walk(child, errors, seen, validLocations);
         }
+    }
+
+    private static bool IsUnderValidSchema(EvaluationResults node, HashSet<string> validLocations)
+    {
+        var location = node.SchemaLocation?.ToString();
+        if (string.IsNullOrEmpty(location))
+        {
+            return false;
+        }
+
+        foreach (var valid in validLocations)
+        {
+            if (location.StartsWith(valid + "/", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

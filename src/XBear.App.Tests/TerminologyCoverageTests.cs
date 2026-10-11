@@ -13,8 +13,11 @@ namespace XBear.App.Tests;
 /// </summary>
 public class TerminologyCatalogTests
 {
-    /// <summary>共享术语表的条目数，与 v1.2.0 契约一致。</summary>
-    private const int ContractTermCount = 36;
+    /// <summary>界面文案术语目录涵盖的条目数。</summary>
+    private const int CatalogTermCount = 36;
+
+    /// <summary>共享术语表的条目数，与 v1.4.0 契约一致（含 6 项隐藏栈 Core 术语）。</summary>
+    private const int ContractTermCount = 42;
 
     private static TerminologyCatalog Create() =>
         new(XBeeSpec.TestSpec().LoadTerminology());
@@ -27,16 +30,17 @@ public class TerminologyCatalogTests
 
         Assert.Equal(ContractTermCount, document.Terms.Count);
 
-        // 中文名属性与术语表条目一一对应：既不缺项，也不多出契约之外的属性。
+        // 中文名属性与界面术语目录条目一一对应：既不缺项，也不多出未声明属性。
         var accessors = typeof(TerminologyCatalog)
             .GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Where(p => p.PropertyType == typeof(string))
             .Select(p => p.Name)
             .ToHashSet(StringComparer.Ordinal);
 
-        Assert.Equal(ContractTermCount, accessors.Count);
-        Assert.Equal(ContractTermCount, catalog.TermIds.Count);
-        Assert.Equal(ContractTermCount, catalog.TermIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(CatalogTermCount, accessors.Count);
+        Assert.Equal(CatalogTermCount, catalog.TermIds.Count);
+        Assert.Equal(CatalogTermCount, catalog.TermIds.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(catalog.TermIds, id => Assert.NotNull(document.Find(id)));
     }
 
     [Fact]
@@ -45,12 +49,9 @@ public class TerminologyCatalogTests
         TerminologyDocument document = XBeeSpec.TestSpec().LoadTerminology();
         TerminologyCatalog catalog = Create();
 
-        Assert.Equal(
-            document.Terms.Select(t => t.Id).Order(StringComparer.Ordinal),
-            catalog.TermIds.Order(StringComparer.Ordinal));
-
-        foreach (Term term in document.Terms)
+        foreach (string termId in catalog.TermIds)
         {
+            Term term = document.Require(termId);
             Assert.Equal(term.Zh, catalog.Zh(term.Id));
             Assert.Equal(term.Meaning, catalog.Meaning(term.Id));
         }

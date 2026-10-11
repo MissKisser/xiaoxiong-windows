@@ -123,6 +123,22 @@ public sealed class InstanceManagerCleanDesktopTests : IDisposable
         [.. InstanceManager.CleanDesktopCommands, InstanceManager.CleanDesktopFlushCommand];
 
     [Fact]
+    public void 净桌面命令序列包含落定BlissLauncher为默认桌面()
+    {
+        Assert.Contains(
+            "cmd package set-home-activity com.android.launcher3/com.bliss.launcher.BlissLauncher",
+            InstanceManager.CleanDesktopCommands);
+    }
+
+    [Fact]
+    public void 净桌面命令序列包含拉起Home活动以使默认桌面置顶()
+    {
+        Assert.Contains(
+            "am start -a android.intent.action.MAIN -c android.intent.category.HOME",
+            InstanceManager.CleanDesktopCommands);
+    }
+
+    [Fact]
     public async Task 调试通路就绪后按序下发净桌面命令并以sync收尾()
     {
         await using var server = new FakeAdbdServer

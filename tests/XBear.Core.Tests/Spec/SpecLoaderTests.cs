@@ -164,7 +164,9 @@ public class SpecLoaderTests
             SpecLoader.ModuleMinimalFixtureName,
             SpecLoader.ModuleFullFixtureName,
             SpecLoader.ApplicationMinimalFixtureName,
-            SpecLoader.ApplicationFullFixtureName
+            SpecLoader.ApplicationFullFixtureName,
+            SpecLoader.IdentityMinimalFixtureName,
+            SpecLoader.IdentityFullFixtureName
         };
 
     [Theory]
@@ -222,6 +224,37 @@ public class SpecLoaderTests
         Assert.NotNull(full.LastOperation);
     }
 
+    [Fact]
+    public void IdentityFixturesLoadIntoModel()
+    {
+        var minimal = SpecTestHost.Loader.LoadIdentityFixture(SpecLoader.IdentityMinimalFixtureName);
+        var full = SpecTestHost.Loader.LoadIdentityFixture(SpecLoader.IdentityFullFixtureName);
+
+        Assert.Equal("XBSN0A1B2C3D4E5F", minimal.SerialNo);
+        Assert.Equal("XBSN9E4D7C2B6A08", full.SerialNo);
+        Assert.Equal("Xion", minimal.DeviceProfile.Brand);
+        Assert.Equal("Xion Devices", full.DeviceProfile.Manufacturer);
+        Assert.NotNull(full.BootIdentity);
+        Assert.NotNull(full.Channels);
+        Assert.Equal(VerificationState.Untested, full.Channels.Smbios);
+    }
+
+    [Fact]
+    public void DetectionSurfaceLoadsIntoModelAndValidates()
+    {
+        var surface = SpecTestHost.Loader.LoadDetectionSurface();
+
+        Assert.Equal("1.0.0", surface.Version);
+        Assert.NotEmpty(surface.Groups);
+        Assert.NotEmpty(surface.FillPolicy);
+        Assert.Equal(43, surface.AllMetrics().Count());
+
+        var result = SpecTestHost.Validator.ValidateDetectionSurface(
+            SpecTestHost.Loader.ReadText(Path.Combine(SpecTestHost.Loader.SpecRoot, SpecLoader.DetectionSurfaceFileName)));
+
+        Assert.True(result.IsValid, result.DescribeErrors());
+    }
+
     /// <summary>新契约的 Schema 文件名与其解析入口的对应关系。</summary>
     public static TheoryData<string> NewContractSchemaFileNames =>
         new()
@@ -229,7 +262,9 @@ public class SpecLoaderTests
             SpecLoader.ProjectionSchemaFileName,
             SpecLoader.FileTransferSchemaFileName,
             SpecLoader.ModuleSchemaFileName,
-            SpecLoader.ApplicationSchemaFileName
+            SpecLoader.ApplicationSchemaFileName,
+            SpecLoader.IdentitySchemaFileName,
+            SpecLoader.DetectionSurfaceSchemaFileName
         };
 
     [Theory]
@@ -257,6 +292,12 @@ public class SpecLoaderTests
                     break;
                 case SpecLoader.ModuleSchemaFileName:
                     SpecTestHost.Loader.ParseModule("{ 不是 JSON");
+                    break;
+                case SpecLoader.IdentitySchemaFileName:
+                    SpecTestHost.Loader.ParseIdentity("{ 不是 JSON");
+                    break;
+                case SpecLoader.DetectionSurfaceSchemaFileName:
+                    SpecTestHost.Loader.ParseDetectionSurface("{ 不是 JSON");
                     break;
                 default:
                     SpecTestHost.Loader.ParseApplication("{ 不是 JSON");

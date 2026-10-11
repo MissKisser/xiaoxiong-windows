@@ -20,7 +20,9 @@ public class ContractSelfCheckTests
             SpecLoader.ProjectionSchemaFileName,
             SpecLoader.FileTransferSchemaFileName,
             SpecLoader.ModuleSchemaFileName,
-            SpecLoader.ApplicationSchemaFileName
+            SpecLoader.ApplicationSchemaFileName,
+            SpecLoader.IdentitySchemaFileName,
+            SpecLoader.DetectionSurfaceSchemaFileName
         };
 
     /// <summary>

@@ -52,12 +52,39 @@ public sealed class DeviceIdentityFactory : IDeviceIdentityFactory
     /// <returns>未与任何在册或已删除实例冲突的标识组合。</returns>
     /// <exception cref="XBearException">连续多次重生成仍无法避开冲突时抛出 <see cref="ErrorCategory.Identity"/>。</exception>
     public async Task<DeviceIdentity> GenerateAsync(CancellationToken cancellationToken = default)
+        => await GenerateAsync(null, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// 生成一组全新标识并绑定机型族画像。机型族画像、序列号、Android ID 与 MAC 同源一次产出，
+    /// 派生链路上不存在「画像一套、标识另一套」的拼装环节。
+    /// </summary>
+    /// <param name="profile">要绑定的机型族画像，为空时按实例序号确定性选取。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>未与任何在册或已删除实例冲突的标识组合。</returns>
+    /// <exception cref="XBearException">连续多次重生成仍无法避开冲突时抛出 <see cref="ErrorCategory.Identity"/>。</exception>
+    public async Task<DeviceIdentity> GenerateAsync(
+        DeviceProfile? profile,
+        CancellationToken cancellationToken = default)
+        => await GenerateForOrdinalAsync(profile, 0, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>
+    /// 生成一组全新标识并绑定机型族画像。实例序号只参与未显式指定机型族时的确定性选取。
+    /// </summary>
+    /// <param name="profile">要绑定的机型族画像，为空时按实例序号确定性选取。</param>
+    /// <param name="instanceOrdinal">实例在在册列表中的序号。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>未与任何在册或已删除实例冲突的标识组合。</returns>
+    /// <exception cref="XBearException">连续多次重生成仍无法避开冲突时抛出 <see cref="ErrorCategory.Identity"/>。</exception>
+    public async Task<DeviceIdentity> GenerateForOrdinalAsync(
+        DeviceProfile? profile,
+        int instanceOrdinal,
+        CancellationToken cancellationToken = default)
     {
         for (int attempt = 0; attempt < _maxAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            DeviceIdentity candidate = _generator.Next();
+            DeviceIdentity candidate = _generator.Next(profile, instanceOrdinal);
             ValidateFormat(candidate);
 
             if (await IsIdentityInUseAsync(candidate, cancellationToken).ConfigureAwait(false))
@@ -76,9 +103,11 @@ public sealed class DeviceIdentityFactory : IDeviceIdentityFactory
 
     /// <summary>
     /// 校验标识各字段是否落在契约允许的取值区间内。
+    /// 序列号、Android ID 与 IMEI 必填；MAC 为条件必填：
+    /// 缺 MAC 时由序列号与机型族画像确定性补齐，因此放行而不拒绝。
     /// </summary>
     /// <param name="identity">待校验的标识组合。</param>
-    /// <exception cref="XBearException">字段长度越界时抛出 <see cref="ErrorCategory.Identity"/>。</exception>
+    /// <exception cref="XBearException">字段格式越界时抛出 <see cref="ErrorCategory.Identity"/>。</exception>
     public static void ValidateFormat(DeviceIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(identity);
@@ -92,6 +121,22 @@ public sealed class DeviceIdentityFactory : IDeviceIdentityFactory
             throw new XBearException(
                 ErrorCategory.Identity,
                 $"IMEI {identity.Imei} 未通过 Luhn 校验。",
+                "请重新生成该实例的设备标识。");
+        }
+
+        if (identity.Mac is not null && !string.IsNullOrWhiteSpace(identity.Mac))
+        {
+            MacAddress.EnsureValid(identity.Mac);
+        }
+    }
+
+    private static void RequireLength(string? value, int min, int max, string fieldName)
+    {
+        if (value is null || value.Length < min || value.Length > max)
+        {
+            throw new XBearException(
+                ErrorCategory.Identity,
+                $"{fieldName} 长度 {value?.Length ?? 0} 超出契约区间 {min} 到 {max}。",
                 "请重新生成该实例的设备标识。");
         }
     }
@@ -117,21 +162,11 @@ public sealed class DeviceIdentityFactory : IDeviceIdentityFactory
     private static bool Conflicts(DeviceIdentity left, DeviceIdentity right) =>
         Same(left.SerialNo, right.SerialNo) ||
         Same(left.AndroidId, right.AndroidId) ||
-        Same(left.Imei, right.Imei);
+        Same(left.Imei, right.Imei) ||
+        Same(left.Mac, right.Mac);
 
     private static bool Same(string? left, string? right) =>
         !string.IsNullOrEmpty(left) &&
         !string.IsNullOrEmpty(right) &&
         string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
-
-    private static void RequireLength(string? value, int min, int max, string fieldName)
-    {
-        if (value is null || value.Length < min || value.Length > max)
-        {
-            throw new XBearException(
-                ErrorCategory.Identity,
-                $"{fieldName} 长度 {value?.Length ?? 0} 超出契约区间 {min} 到 {max}。",
-                "请重新生成该实例的设备标识。");
-        }
-    }
 }

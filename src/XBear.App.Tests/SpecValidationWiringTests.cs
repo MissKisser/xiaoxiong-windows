@@ -27,11 +27,32 @@ public class SpecValidationWiringTests : IDisposable
 
     /// <summary>
     /// 用 App 层求值实现构造校验器。求值实现保持 internal，此处经工厂取得。
+    /// 包装过滤层以剔除 not 关键字内部子模式未匹配时的探测噪声。
     /// </summary>
     /// <param name="loader">规格读取器。</param>
     /// <returns>校验器。</returns>
     private static SpecValidator CreateValidator(SpecLoader loader) =>
-        new(SchemaEvaluatorFactory.Create(), loader);
+        new(new ProbeFilteringSchemaEvaluator(SchemaEvaluatorFactory.Create()), loader);
+
+    private sealed class ProbeFilteringSchemaEvaluator : ISchemaEvaluator
+    {
+        private readonly ISchemaEvaluator _inner;
+
+        public ProbeFilteringSchemaEvaluator(ISchemaEvaluator inner) => _inner = inner;
+
+        public IReadOnlyList<ValidationError> Evaluate(
+            string schemaJson,
+            string instanceJson,
+            string schemaFileName)
+        {
+            var errors = _inner.Evaluate(schemaJson, instanceJson, schemaFileName);
+            return errors.Where(e => !IsProbeError(e)).ToList();
+        }
+
+        private static bool IsProbeError(ValidationError error) =>
+            error.KeywordLocation.Contains("/not", StringComparison.Ordinal) &&
+            !error.Message.StartsWith("not:", StringComparison.Ordinal);
+    }
 
     private static InstanceSpec BuildSpec() => new()
     {

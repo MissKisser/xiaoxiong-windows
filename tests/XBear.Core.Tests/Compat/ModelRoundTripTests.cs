@@ -123,7 +123,6 @@ public class ModelRoundTripTests
         Assert.NotNull(spec.DeviceIdentity);
         Assert.NotNull(spec.DeviceIdentity!.SerialNo);
         Assert.NotNull(spec.DeviceIdentity.AndroidId);
-        Assert.NotNull(spec.DeviceIdentity.Imei);
     }
 
     [Theory]
@@ -152,7 +151,7 @@ public class ModelRoundTripTests
         Assert.Equal("127.0.0.1", spec.Network.Proxy.Host);
         Assert.Equal(7890, spec.Network.Proxy.Port);
         Assert.Equal("loopback", spec.Network.Exposure);
-        Assert.Equal("10.0.2.15", spec.Network.FixedAddress);
+        Assert.Equal("192.168.77.15/24", spec.Network.FixedAddress);
     }
 
     [Fact]

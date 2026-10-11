@@ -28,7 +28,9 @@ public class SchemaCompatibilityTests
                      SpecLoader.ModuleMinimalFixtureName,
                      SpecLoader.ModuleFullFixtureName,
                      SpecLoader.ApplicationMinimalFixtureName,
-                     SpecLoader.ApplicationFullFixtureName
+                     SpecLoader.ApplicationFullFixtureName,
+                     SpecLoader.IdentityMinimalFixtureName,
+                     SpecLoader.IdentityFullFixtureName
                  })
         {
             var result = SpecTestHost.Validator.ValidateFixture(fixture);
@@ -68,15 +70,19 @@ public class SchemaCompatibilityTests
     [Fact]
     public void NestedSchemasDoNotDeclareAdditionalPropertiesFalse()
     {
-        // 已知契约缺口：只有顶层封闭，嵌套对象未声明 additionalProperties: false。
-        // 该行为由本测试固定下来，一旦补齐契约即刻转红，提醒同步更新判定。
+        // 规格 2.0.0 收紧：deviceIdentity 已封闭（additionalProperties: false）；
+        // resources、network 与 platformConfig 仍保持开放逃生舱。
         var schema = JsonNode
             .Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.InstanceSchemaFileName))!
             .AsObject();
 
-        var nestedObjects = new[] { "resources", "network", "deviceIdentity", "platformConfig" };
+        Assert.False(
+            schema["properties"]!["deviceIdentity"]!["additionalProperties"]!.GetValue<bool>(),
+            "deviceIdentity 必须声明 additionalProperties: false 封闭其字段集");
 
-        foreach (var name in nestedObjects)
+        var openNestedObjects = new[] { "resources", "network", "platformConfig" };
+
+        foreach (var name in openNestedObjects)
         {
             var closed = schema["properties"]![name]!["additionalProperties"];
             Assert.True(closed is null, $"{name} 已声明 additionalProperties，请更新本测试与契约说明");
@@ -485,7 +491,9 @@ public class SemanticConsistencyTests
 
         if (spec.Network?.FixedAddress is { } address)
         {
-            Assert.Matches(@"^10\.0\.2\.[0-9]{1,3}$", address);
+            Assert.Matches(
+                @"^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(?:\/(?:3[0-2]|[12]?[0-9]))?$",
+                address);
         }
     }
 

@@ -786,6 +786,77 @@ public class ApplicationModelRoundTripTests
 }
 
 /// <summary>
+/// 设备身份与检测面台账的往返测试：两端样例都必须能被强类型模型完整解析且重新序列化保持一致。
+/// </summary>
+public class IdentityModelRoundTripTests
+{
+    public static TheoryData<string> IdentityFixtureFiles =>
+        new()
+        {
+            { SpecLoader.IdentityMinimalFixtureName },
+            { SpecLoader.IdentityFullFixtureName }
+        };
+
+    [Theory]
+    [MemberData(nameof(IdentityFixtureFiles))]
+    public void IdentitySampleParsesIntoModel(string fixtureFileName)
+    {
+        var spec = SpecTestHost.Loader.LoadIdentityFixture(fixtureFileName);
+
+        Assert.Matches(@"^\d+\.\d+\.\d+$", spec.SchemaVersion);
+        Assert.StartsWith("XBSN", spec.SerialNo, StringComparison.Ordinal);
+        Assert.Matches("^[0-9a-f]{16}$", spec.AndroidId);
+        Assert.Matches("^([0-9a-f]{2}:){5}[0-9a-f][02468aAcCeE]$", spec.Mac);
+        Assert.NotNull(spec.DeviceProfile);
+        Assert.False(string.IsNullOrWhiteSpace(spec.DeviceProfile.Brand));
+    }
+
+    [Theory]
+    [MemberData(nameof(IdentityFixtureFiles))]
+    public void IdentityRoundTripKeepsEveryDeclaredField(string fixtureFileName)
+    {
+        var json = SpecTestHost.Loader.ReadFixtureText(fixtureFileName);
+
+        var first = SpecTestHost.Loader.LoadIdentityFixture(fixtureFileName);
+        var reserialized = JsonSerializer.Serialize(first, SpecLoader.SerializerOptions);
+
+        Assert.Equal(
+            JsonLeafPaths.NonNullLeaves(JsonNode.Parse(json)),
+            JsonLeafPaths.NonNullLeaves(JsonNode.Parse(reserialized)));
+    }
+
+    [Fact]
+    public void MinimalIdentityDeclaresOnlyRequiredFields()
+    {
+        var sample = JsonNode.Parse(SpecTestHost.Loader.ReadFixtureText(SpecLoader.IdentityMinimalFixtureName))!.AsObject();
+        var schema = JsonNode.Parse(SpecTestHost.Loader.ReadSchemaText(SpecLoader.IdentitySchemaFileName))!.AsObject();
+        var required = schema["required"]!.AsArray().Select(n => n!.GetValue<string>()).ToArray();
+
+        foreach (var field in required)
+        {
+            Assert.True(sample.ContainsKey(field), $"最小样例缺少必填字段 {field}");
+        }
+
+        // schemaVersion, serialNo, androidId, mac, deviceProfile (5 required)
+        Assert.Equal(required.Length, sample.Count);
+    }
+
+    [Fact]
+    public void DetectionSurfaceParsesAndRoundTrips()
+    {
+        var json = SpecTestHost.Loader.ReadText(
+            Path.Combine(SpecTestHost.Loader.SpecRoot, SpecLoader.DetectionSurfaceFileName));
+
+        var spec = SpecTestHost.Loader.ParseDetectionSurface(json);
+        var reserialized = JsonSerializer.Serialize(spec, SpecLoader.SerializerOptions);
+
+        Assert.Equal(
+            JsonLeafPaths.NonNullLeaves(JsonNode.Parse(json)),
+            JsonLeafPaths.NonNullLeaves(JsonNode.Parse(reserialized)));
+    }
+}
+
+/// <summary>
 /// JSON 叶子路径收集，供四份新契约的往返比对共用。
 /// </summary>
 internal static class JsonLeafPaths

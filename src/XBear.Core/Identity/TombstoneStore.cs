@@ -23,6 +23,10 @@ public sealed class TombstoneRecord
     /// <summary>该实例曾用的 IMEI。</summary>
     [JsonPropertyName("imei")]
     public string? Imei { get; set; }
+
+    /// <summary>该实例曾用的网卡 MAC。MAC 逐次跳变本身是异常特征，删除的实例其 MAC 也不得被后续实例复用。</summary>
+    [JsonPropertyName("mac")]
+    public string? Mac { get; set; }
 }
 
 /// <summary>
@@ -87,17 +91,20 @@ public sealed class TombstoneStore
     /// <param name="serialNo">待查序列号，为 null 时跳过该项。</param>
     /// <param name="androidId">待查 Android ID，为 null 时跳过该项。</param>
     /// <param name="imei">待查 IMEI，为 null 时跳过该项。</param>
+    /// <param name="mac">待查网卡 MAC，为 null 时跳过该项。</param>
     /// <returns>任一非空标识命中墓碑即返回 true。</returns>
     public async Task<bool> IsIdentityTakenAsync(
         string? serialNo,
         string? androidId,
-        string? imei)
+        string? imei,
+        string? mac = null)
     {
         IReadOnlyList<TombstoneRecord> records = await ListAsync().ConfigureAwait(false);
         return records.Any(r =>
             Matches(serialNo, r.SerialNo) ||
             Matches(androidId, r.AndroidId) ||
-            Matches(imei, r.Imei));
+            Matches(imei, r.Imei) ||
+            Matches(mac, r.Mac));
     }
 
     /// <summary>
@@ -129,6 +136,7 @@ public sealed class TombstoneStore
                     SerialNo = identity?.SerialNo,
                     AndroidId = identity?.AndroidId,
                     Imei = identity?.Imei,
+                    Mac = identity?.Mac,
                 });
             }
             else
@@ -136,6 +144,7 @@ public sealed class TombstoneStore
                 existing.SerialNo ??= identity?.SerialNo;
                 existing.AndroidId ??= identity?.AndroidId;
                 existing.Imei ??= identity?.Imei;
+                existing.Mac ??= identity?.Mac;
             }
 
             await SaveUnsafeAsync(records, cancellationToken).ConfigureAwait(false);

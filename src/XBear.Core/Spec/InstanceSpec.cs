@@ -152,8 +152,12 @@ public sealed class NetworkSpec
     [JsonPropertyName("portForwards")]
     public List<PortForward> PortForwards { get; set; } = new();
 
-    /// <summary>固定地址，格式 10.0.2.x，为 null 时由 QEMU 动态分配。</summary>
-    [JsonPropertyName("fixedAddress")]
+    /// <summary>
+/// 实例的固定地址，形式为 IPv4 地址或 IPv4 地址加前缀长度，为 null 时由宿主网络仿真动态分配。
+/// 契约不预设网段，取宿主网络仿真的默认网段会把它写进实例，属可被交叉校验命中的暴露面，
+/// 因此只要求取值合法；地址不得随启动顺序漂移。前缀缺省时由产品按选定的网段补齐。
+/// </summary>
+[JsonPropertyName("fixedAddress")]
     public string? FixedAddress { get; set; }
 
     [JsonPropertyName("proxy")]
@@ -197,15 +201,63 @@ public sealed class ProxySpec
     public string? Url { get; set; }
 }
 
-/// <summary>实例设备身份标识，每实例强制独立且不得自动复用。</summary>
+/// <summary>
+/// 实例设备身份，每实例强制独立且不得自动复用。
+/// 省略或为 null 表示用户未手工指定，由产品在创建实例时生成并写入，不表示该实例无身份；
+/// 一旦存在则 serialNo 与 androidId 必须齐全，半截身份一律拒绝——
+/// 标识只生成一半时相关下发通道会静默失效，实例对外呈现为空序列号。
+/// </summary>
 public sealed class DeviceIdentity
 {
+    /// <summary>设备序列号，恒为 XBSN 加 12 位大写十六。</summary>
     [JsonPropertyName("serialNo")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SerialNo { get; set; }
 
+    /// <summary>Android ID，恒为 16 位小写十六。</summary>
     [JsonPropertyName("androidId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AndroidId { get; set; }
 
+    /// <summary>
+    /// IMEI，恒为 15 位、国家码 86、末位为 Luhn 校验位。
+    /// 仅当所引用镜像实测具备 telephony 能力时填写，否则必须为 null；
+    /// 为 null 时不得向内核命令行下发该键，否则制造「声明存在却无人消费」的矛盾。
+    /// </summary>
     [JsonPropertyName("imei")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Imei { get; set; }
+
+    /// <summary>
+    /// 网卡 MAC，6 字节小写十六冒号分隔，末字节取偶数位（组播位为字节最低位，为 0 才表示单播），
+    /// 全零亦被拒。省略或为 null 时由序列号确定性派生，实例首次创建后固定不变：
+    /// 同实例跨重启恒定，跨实例唯一；MAC 逐次跳变本身就是异常特征。
+    /// </summary>
+    [JsonPropertyName("mac")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Mac { get; set; }
+
+    /// <summary>
+    /// 机型族标识，引用 identity.schema.json 的机型族画像。
+    /// 省略或为 null 时按实例序号确定性选取；同机型族实例之间仍需靠序列号、Android ID 与 MAC 区分。
+    /// </summary>
+    [JsonPropertyName("deviceProfileId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DeviceProfileId { get; set; }
+
+    /// <summary>
+    /// 所引用的 identity.schema 版本。读入时若高于自身支持的版本，
+    /// 按未识别处理并保留原始字段，不得静默丢弃。
+    /// </summary>
+    [JsonPropertyName("identityVersion")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? IdentityVersion { get; set; }
+
+    /// <summary>
+    /// 判断设备身份是否已按契约填齐必填字段。必填化后不允许半截身份存在：
+    /// 序列号或 Android ID 缺失时相关下发通道会静默失效。
+    /// </summary>
+    /// <returns>序列号与 Android ID 均非空时返回 true。</returns>
+    public bool HasRequiredFields() =>
+        !string.IsNullOrWhiteSpace(SerialNo) && !string.IsNullOrWhiteSpace(AndroidId);
 }

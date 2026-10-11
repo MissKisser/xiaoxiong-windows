@@ -46,6 +46,12 @@ public sealed class SpecLoader
     /// <summary>术语表 Schema 文件名。</summary>
     public const string TerminologySchemaFileName = "terminology.schema.json";
 
+    /// <summary>设备身份 Schema 文件名，是实例配置中 deviceIdentity 段的上位定义。</summary>
+    public const string IdentitySchemaFileName = "identity.schema.json";
+
+    /// <summary>检测面指标台账 Schema 文件名。</summary>
+    public const string DetectionSurfaceSchemaFileName = "detection-surface.schema.json";
+
     /// <summary>Windows 端实例样例文件名。</summary>
     public const string WindowsInstanceFixtureName = "instance.windows.json";
 
@@ -87,6 +93,15 @@ public sealed class SpecLoader
 
     /// <summary>术语表文件名。</summary>
     public const string TerminologyFileName = "terminology.json";
+
+    /// <summary>检测面指标台账文件名。</summary>
+    public const string DetectionSurfaceFileName = "detection-surface.json";
+
+    /// <summary>只含必填字段的最小设备身份样例文件名。</summary>
+    public const string IdentityMinimalFixtureName = "identity-minimal.json";
+
+    /// <summary>含全部可选段落的完整设备身份样例文件名。</summary>
+    public const string IdentityFullFixtureName = "identity-full.json";
 
     /// <summary>版本契约文件名。</summary>
     public const string VersionFileName = "version.json";
@@ -268,10 +283,26 @@ public sealed class SpecLoader
     public PerformanceBaseline LoadBaseline() =>
         ParseBaseline(ReadText(Path.Combine(SpecRoot, BaselineFileName)));
 
-    /// <summary>读取并解析术语表。</summary>
+    /// <summary>从文件读取并解析术语表。</summary>
     /// <returns>解析后的术语表文档。</returns>
     public TerminologyDocument LoadTerminology() =>
         ParseTerminology(ReadText(Path.Combine(SpecRoot, TerminologyFileName)));
+
+    /// <summary>从文件读取并解析设备身份。</summary>
+    /// <param name="absolutePath">设备身份文件绝对路径。</param>
+    /// <returns>解析后的设备身份对象。</returns>
+    public IdentitySpec LoadIdentityFile(string absolutePath) => ParseIdentity(ReadText(absolutePath));
+
+    /// <summary>读取并解析指定样例文件中的设备身份。</summary>
+    /// <param name="fixtureFileName">样例文件名。</param>
+    /// <returns>解析后的设备身份对象。</returns>
+    public IdentitySpec LoadIdentityFixture(string fixtureFileName) =>
+        ParseIdentity(ReadFixtureText(fixtureFileName));
+
+    /// <summary>读取并解析检测面指标台账。</summary>
+    /// <returns>解析后的检测面指标台账。</returns>
+    public DetectionSurfaceSpec LoadDetectionSurface() =>
+        ParseDetectionSurface(ReadText(Path.Combine(SpecRoot, DetectionSurfaceFileName)));
 
     /// <summary>读取并解析设计令牌。</summary>
     /// <returns>解析后的设计令牌。</returns>
@@ -318,6 +349,24 @@ public sealed class SpecLoader
         var doc = Deserialize<TerminologyDocument>(json, "术语表");
         return doc;
     }
+
+    /// <summary>
+    /// 解析设备身份 JSON。
+    /// </summary>
+    /// <param name="json">设备身份 JSON 文本。</param>
+    /// <returns>解析后的设备身份对象。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public IdentitySpec ParseIdentity(string json) =>
+        Deserialize<IdentitySpec>(json, "设备身份");
+
+    /// <summary>
+    /// 解析检测面指标台账 JSON。
+    /// </summary>
+    /// <param name="json">检测面指标台账 JSON 文本。</param>
+    /// <returns>解析后的检测面指标台账。</returns>
+    /// <exception cref="XBearException">JSON 非法或顶层不是对象时抛出。</exception>
+    public DetectionSurfaceSpec ParseDetectionSurface(string json) =>
+        Deserialize<DetectionSurfaceSpec>(json, "检测面指标台账");
 
     /// <summary>
     /// 解析快照元数据 JSON。

@@ -248,6 +248,71 @@ public static class CpioNewcArchive
             string.Equals(entry.Name, name, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// 在归档条目列表中添加或更新普通文件条目（维持在 TRAILER 结束标记之前）。
+    /// </summary>
+    /// <param name="entries">归档条目列表。</param>
+    /// <param name="name">文件相对路径。</param>
+    /// <param name="content">文件字节内容。</param>
+    /// <param name="mode">文件权限与类型位，默认为 0100644 普通文件。</param>
+    public static void SetOrAddEntry(
+        List<CpioNewcEntry> entries,
+        string name,
+        byte[] content,
+        uint mode = 0x81A4)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        ArgumentNullException.ThrowIfNull(content);
+
+        var existing = Find(entries, name);
+        if (existing is not null)
+        {
+            existing.Content = content;
+            return;
+        }
+
+        var entry = new CpioNewcEntry
+        {
+            Name = name,
+            Content = content,
+            Mode = mode,
+            Nlink = 1,
+            Mtime = 0,
+        };
+
+        int trailerIndex = entries.FindIndex(e => e.Name == TrailerName);
+        if (trailerIndex >= 0)
+        {
+            entries.Insert(trailerIndex, entry);
+        }
+        else
+        {
+            entries.Add(entry);
+        }
+    }
+
+    /// <summary>
+    /// 从归档条目列表中移除指定名称的条目。
+    /// </summary>
+    /// <param name="entries">归档条目列表。</param>
+    /// <param name="name">待移除的条目名。</param>
+    /// <returns>若成功移除则返回 true，未找到返回 false。</returns>
+    public static bool RemoveEntry(List<CpioNewcEntry> entries, string name)
+    {
+        ArgumentNullException.ThrowIfNull(entries);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+
+        int index = entries.FindIndex(e => string.Equals(e.Name, name, StringComparison.Ordinal));
+        if (index >= 0)
+        {
+            entries.RemoveAt(index);
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>判断指定偏移处是否为 newc 魔数。</summary>
     /// <param name="data">归档字节内容。</param>
     /// <param name="offset">待检查的偏移。</param>

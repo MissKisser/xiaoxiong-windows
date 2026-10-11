@@ -62,6 +62,8 @@ public static class KernelCommandLine
 
     /// <summary>
     /// 把设备标识映射为内核引导命令行片段，空字段不产出片段。
+    /// IMEI 为条件通道：镜像无 telephony 能力时该项恒为空，不产出片段，
+    /// 向无基带的实例下发该键只会制造「声明存在却无人消费」的矛盾。
     /// </summary>
     /// <param name="identity">实例设备标识，可为空，空值不产出任何片段。</param>
     /// <returns>按固定顺序排列的引导命令行片段集合。</returns>
@@ -144,6 +146,43 @@ public static class KernelCommandLine
         }
 
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// 清洗内核引导命令行：提取并消除 SRC= 等安装态标记（便于等价迁移至 initrd 内嵌），
+    /// 并按设计默认处置移除串口控制台参数（如 console=ttyS0）。
+    /// </summary>
+    /// <param name="commandLine">原始引导命令行。</param>
+    /// <param name="extractedSrc">提取出的 SRC 参数取值，未声明时为 null。</param>
+    /// <returns>清洗收敛后的引导命令行。</returns>
+    public static string SanitizeKernelAppend(string commandLine, out string? extractedSrc)
+    {
+        extractedSrc = null;
+        if (string.IsNullOrWhiteSpace(commandLine))
+        {
+            return string.Empty;
+        }
+
+        string[] tokens = commandLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        var retained = new List<string>(tokens.Length);
+
+        foreach (string token in tokens)
+        {
+            if (token.StartsWith("SRC=", StringComparison.OrdinalIgnoreCase))
+            {
+                extractedSrc = token[4..].Trim();
+                continue;
+            }
+
+            if (token.StartsWith("console=ttyS", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            retained.Add(token);
+        }
+
+        return Compose(retained);
     }
 
     /// <summary>拼接单个键值对形式的引导命令行片段。</summary>

@@ -78,6 +78,12 @@ public sealed class InstanceManager
         // 收回顶部下滑手势的焦点占用：通知栏一旦展开会持续抢占输入焦点。
         "cmd statusbar collapse",
 
+        // 落定默认桌面为 BlissLauncher，消除多启动器竞争与首启偏好丢失导致的 ResolverActivity 抢占。
+        "cmd package set-home-activity com.android.launcher3/com.bliss.launcher.BlissLauncher",
+
+        // 重新拉起标准桌面以确保默认桌面置顶并取代可能驻留的桌面选择器。
+        "am start -a android.intent.action.MAIN -c android.intent.category.HOME",
+
         // 关闭首启时系统弹出的桌面选择器叠层，避免其覆盖在标准桌面之上拦截后续操作。
         "input keyevent 4",
     ];

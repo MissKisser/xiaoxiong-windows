@@ -51,6 +51,7 @@ public sealed partial class FileInstanceRepository : IInstanceRepository
 
     /// <summary>
     /// 列出全部实例配置，损坏或无法解析的文件跳过不抛异常。
+    /// 读入时自动为缺失身份字段的实例补齐生成并回写，保证实例配置始终满足收紧后的契约。
     /// </summary>
     /// <param name="cancellationToken">取消令牌。</param>
     /// <returns>全部可解析的实例配置。</returns>
@@ -67,6 +68,7 @@ public sealed partial class FileInstanceRepository : IInstanceRepository
                 InstanceSpec? spec = await TryReadAsync(path, cancellationToken).ConfigureAwait(false);
                 if (spec is not null)
                 {
+                    spec = await EnsureIdentityBackfilledAsync(path, spec, cancellationToken).ConfigureAwait(false);
                     results.Add(spec);
                 }
             }
@@ -81,6 +83,7 @@ public sealed partial class FileInstanceRepository : IInstanceRepository
 
     /// <summary>
     /// 按标识读取单个实例配置。
+    /// 读入时自动为缺失身份字段的实例补齐生成并回写。
     /// </summary>
     /// <param name="id">实例标识。</param>
     /// <param name="cancellationToken">取消令牌。</param>
@@ -98,7 +101,8 @@ public sealed partial class FileInstanceRepository : IInstanceRepository
                 return null;
             }
 
-            return await ReadAsync(path, cancellationToken).ConfigureAwait(false);
+            InstanceSpec spec = await ReadAsync(path, cancellationToken).ConfigureAwait(false);
+            return await EnsureIdentityBackfilledAsync(path, spec, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -204,6 +208,71 @@ public sealed partial class FileInstanceRepository : IInstanceRepository
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// 检查实例配置是否需要补齐身份，需要时就地补齐生成并写回磁盘。
+    /// 补齐是自动且幂等的，已完整的身份原样保留，绝不重写。
+    /// </summary>
+    /// <param name="path">配置文件绝对路径。</param>
+    /// <param name="spec">已读出的实例配置。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    /// <returns>补齐后的实例配置。</returns>
+    private async Task<InstanceSpec> EnsureIdentityBackfilledAsync(
+        string path,
+        InstanceSpec spec,
+        CancellationToken cancellationToken)
+    {
+        if (!DeviceIdentityMigration.NeedsMigration(spec))
+        {
+            return spec;
+        }
+
+        var ordinal = DeviceProfileCatalog.OrdinalForInstanceId(spec.Id);
+        var profile = DeviceProfileCatalog.Select(ordinal);
+
+        var existing = spec.DeviceIdentity;
+        string serialNo = string.IsNullOrWhiteSpace(existing?.SerialNo)
+            ? CryptoDeviceIdentityGenerator.GenerateSerialNo()
+            : existing.SerialNo.Trim();
+
+        string androidId = string.IsNullOrWhiteSpace(existing?.AndroidId)
+            ? CryptoDeviceIdentityGenerator.GenerateAndroidId()
+            : existing.AndroidId.Trim();
+
+        string? imei = string.IsNullOrWhiteSpace(existing?.Imei)
+            ? null
+            : existing.Imei.Trim();
+
+        string? mac = string.IsNullOrWhiteSpace(existing?.Mac)
+            ? MacAddress.Derive(profile, serialNo)
+            : existing.Mac.Trim();
+
+        string profileId = string.IsNullOrWhiteSpace(existing?.DeviceProfileId)
+            ? profile.ProfileId
+            : existing.DeviceProfileId.Trim();
+
+        spec.DeviceIdentity = new DeviceIdentity
+        {
+            SerialNo = serialNo,
+            AndroidId = androidId,
+            Imei = imei,
+            Mac = mac,
+            DeviceProfileId = profileId,
+            IdentityVersion = existing?.IdentityVersion ?? IdentityContractVersions.Current,
+        };
+
+        try
+        {
+            string json = JsonSerializer.Serialize(spec, SerializerOptions);
+            await AtomicFile.WriteAllTextAsync(path, json, cancellationToken).ConfigureAwait(false);
+        }
+        catch (IOException)
+        {
+            // 写入失败不阻断内存中可用实例的返回，下次加载继续尝试回写。
+        }
+
+        return spec;
     }
 
     private static async Task<InstanceSpec> ReadAsync(string path, CancellationToken cancellationToken)
