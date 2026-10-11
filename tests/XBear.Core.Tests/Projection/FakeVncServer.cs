@@ -336,6 +336,50 @@ internal sealed class FakeVncConnection
         await WriteExactAsync(bgraPixels);
     }
 
+    /// <summary>一个待下发的 Raw 矩形。</summary>
+    /// <param name="X">起始横坐标。</param>
+    /// <param name="Y">起始纵坐标。</param>
+    /// <param name="Width">宽度。</param>
+    /// <param name="Height">高度。</param>
+    /// <param name="Fill">像素的 B 分量填充值。</param>
+    public readonly record struct RawRect(int X, int Y, int Width, int Height, byte Fill = 0x40);
+
+    /// <summary>
+    /// 在一条 FramebufferUpdate 里下发多个 Raw 矩形，用于构造越界矩形与多矩形帧。
+    /// </summary>
+    /// <param name="rects">按顺序下发的矩形。</param>
+    public async Task SendRawFrameAsync(params RawRect[] rects)
+    {
+        ArgumentNullException.ThrowIfNull(rects);
+
+        var header = new byte[4];
+        header[0] = Rfb.ServerFramebufferUpdate;
+        header[1] = 0;
+        BinaryPrimitives.WriteUInt16BigEndian(header.AsSpan(2, 2), (ushort)rects.Length);
+        await WriteExactAsync(header);
+
+        foreach (RawRect rect in rects)
+        {
+            var rectHeader = new byte[12];
+            BinaryPrimitives.WriteUInt16BigEndian(rectHeader.AsSpan(0, 2), (ushort)rect.X);
+            BinaryPrimitives.WriteUInt16BigEndian(rectHeader.AsSpan(2, 2), (ushort)rect.Y);
+            BinaryPrimitives.WriteUInt16BigEndian(rectHeader.AsSpan(4, 2), (ushort)rect.Width);
+            BinaryPrimitives.WriteUInt16BigEndian(rectHeader.AsSpan(6, 2), (ushort)rect.Height);
+            BinaryPrimitives.WriteInt32BigEndian(rectHeader.AsSpan(8, 4), Rfb.EncodingRaw);
+            await WriteExactAsync(rectHeader);
+
+            int pixels = checked(rect.Width * rect.Height);
+            var payload = new byte[pixels * 4];
+            for (int i = 0; i < pixels; i++)
+            {
+                payload[i * 4 + 0] = rect.Fill;
+                payload[i * 4 + 3] = 0xFF;
+            }
+
+            await WriteExactAsync(payload);
+        }
+    }
+
     /// <summary>
     /// 发送桌面尺寸变化伪编码（DesktopSize = -223）。
     /// </summary>

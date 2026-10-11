@@ -72,14 +72,22 @@ public sealed class ProjectionServiceTests
             stateResolver: id => InstanceState.Running,
             qmpClientFactory: () => qmp);
 
+        // 取帧纪律为「先补发挂起请求、再上报画面到达」，
+        // 因此判定首帧就绪必须以画面到达事件为准，而不是以服务端收到请求为准。
+        var arrivedTcs = new TaskCompletionSource<ProjectionFrameArrivedEventArgs>();
         ProjectionFrameArrivedEventArgs? arrivedArgs = null;
-        service.FrameArrived += (s, e) => arrivedArgs = e;
+        service.FrameArrived += (s, e) =>
+        {
+            arrivedArgs = e;
+            arrivedTcs.TrySetResult(e);
+        };
 
         ProjectionSession session = await service.StartAsync(InstanceId, targetFps: 30);
         Assert.Equal(ProjectionState.Active, session.State);
         Assert.Equal(InstanceId, session.InstanceRef);
         Assert.True(session.ToSpec().IsPresenting());
 
+        await arrivedTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
         await frameReadyTcs.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.NotNull(arrivedArgs);
@@ -270,5 +278,88 @@ public sealed class ProjectionServiceTests
 
         Assert.Equal(ProjectionState.Stopped, session.State);
         Assert.Null(service.GetSession(InstanceId));
+    }
+
+    [Fact]
+    public async Task 会话存续期间_启动保活损伤通道且停止会话时被清理()
+    {
+        byte[] pixels = new byte[Width * Height * 4];
+        await using var vncServer = FakeVncServer.CreateStandard(Width, Height, "keepalive-desktop", async conn =>
+        {
+            await conn.ReceiveFramebufferUpdateRequestAsync();
+            await conn.SendRawFrameAsync(Width, Height, pixels);
+            while (!conn.CancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(20, conn.CancellationToken);
+            }
+        });
+
+        var qmp = new RecordingQmpClient();
+        var adb = new RecordingAdbClient();
+        var ports = new AllocatedPorts(5555, 5556, vncServer.Port);
+
+        await using var service = new ProjectionService(
+            portResolver: id => ports,
+            stateResolver: id => InstanceState.Running,
+            qmpClientFactory: () => qmp,
+            options: new ProjectionServiceOptions
+            {
+                KeepaliveEnabled = true,
+                KeepaliveFrequencyHz = 30,
+                KeepaliveStartupProbeTimeout = TimeSpan.FromSeconds(2),
+            },
+            adbClientFactory: () => adb);
+
+        await service.StartAsync(InstanceId);
+
+        ProjectionStreamDiagnostics? running = service.GetStreamDiagnostics(InstanceId);
+        Assert.NotNull(running);
+        Assert.True(running.KeepaliveActive);
+        Assert.Equal(30, running.KeepaliveFrequencyHz);
+        Assert.Equal(RecordingAdbClient.Pid, running.KeepalivePid);
+        Assert.Null(running.KeepaliveError);
+
+        Assert.Contains(ProjectionKeepalive.BuildStartCommand(), adb.ShellCommands);
+        Assert.Contains($"mkdir -p {ProjectionKeepalive.GuestDirectory}", adb.ShellCommands);
+        Assert.Equal(ProjectionKeepalive.BuildScript(30), adb.PushedScripts[ProjectionKeepalive.GuestScriptPath]);
+
+        await service.StopAsync(InstanceId);
+
+        Assert.Contains(ProjectionKeepalive.BuildStopCommand(), adb.ShellCommands);
+        Assert.Null(service.GetStreamDiagnostics(InstanceId));
+        Assert.True(adb.Disposed);
+    }
+
+    [Fact]
+    public async Task 关闭保活开关_会话照常建立且不向实例发起任何adb命令()
+    {
+        byte[] pixels = new byte[Width * Height * 4];
+        await using var vncServer = FakeVncServer.CreateStandard(Width, Height, "nokeepalive-desktop", async conn =>
+        {
+            await conn.ReceiveFramebufferUpdateRequestAsync();
+            await conn.SendRawFrameAsync(Width, Height, pixels);
+        });
+
+        var qmp = new RecordingQmpClient();
+        var adb = new RecordingAdbClient();
+        var ports = new AllocatedPorts(5555, 5556, vncServer.Port);
+
+        await using var service = new ProjectionService(
+            portResolver: id => ports,
+            stateResolver: id => InstanceState.Running,
+            qmpClientFactory: () => qmp,
+            options: new ProjectionServiceOptions { KeepaliveEnabled = false },
+            adbClientFactory: () => adb);
+
+        ProjectionSession session = await service.StartAsync(InstanceId);
+        Assert.Equal(ProjectionState.Active, session.State);
+        Assert.Empty(adb.ShellCommands);
+
+        ProjectionStreamDiagnostics? diagnostics = service.GetStreamDiagnostics(InstanceId);
+        Assert.NotNull(diagnostics);
+        Assert.False(diagnostics.KeepaliveActive);
+        Assert.Equal(0, diagnostics.KeepaliveFrequencyHz);
+
+        await service.StopAsync(InstanceId);
     }
 }

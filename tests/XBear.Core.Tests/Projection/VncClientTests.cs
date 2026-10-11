@@ -223,4 +223,321 @@ public sealed class VncClientTests
         Assert.Equal(ErrorCategory.Protocol, ex.Category);
         Assert.Contains("连接已中断", ex.Message);
     }
+
+    [Fact]
+    public async Task 常驻挂起请求_首帧非增量之后每帧都立即补发下一条增量请求()
+    {
+        const int width = 8;
+        const int height = 4;
+        byte[] pixels = new byte[width * height * 4];
+        Array.Fill(pixels, (byte)0x20);
+
+        var requests = new List<(byte Incremental, int X, int Y, int Width, int Height)>();
+        var allDone = new TaskCompletionSource<bool>();
+
+        await using var server = FakeVncServer.CreateStandard(width, height, "pending-desktop", async conn =>
+        {
+            for (int index = 0; index < 4; index++)
+            {
+                var request = await conn.ReceiveFramebufferUpdateRequestAsync();
+                lock (requests)
+                {
+                    requests.Add(request);
+                }
+
+                if (index == 0)
+                {
+                    // 首帧必须是整屏非增量请求。
+                    Assert.Equal(0, request.Incremental);
+                }
+                else
+                {
+                    Assert.Equal(1, request.Incremental);
+                }
+
+                await conn.SendRawFrameAsync(width, height, pixels);
+            }
+
+            // 第五次读取应立刻拿到客户端读完第四帧后补发的请求。
+            var fifth = await conn.ReceiveFramebufferUpdateRequestAsync();
+            lock (requests)
+            {
+                requests.Add(fifth);
+            }
+
+            allDone.TrySetResult(true);
+        });
+
+        var frames = new ProjectionFrameStore(width, height);
+        await using var client = new VncClient();
+        await client.ConnectAsync(server.Port, frames);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = Task.Run(() => client.RunFrameLoopAsync(frames, cts.Token));
+
+        await allDone.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        (byte Incremental, int X, int Y, int Width, int Height)[] snapshot;
+        lock (requests)
+        {
+            snapshot = requests.ToArray();
+        }
+
+        Assert.Equal(5, snapshot.Length);
+        for (int index = 1; index < snapshot.Length; index++)
+        {
+            Assert.Equal(1, snapshot[index].Incremental);
+            Assert.Equal(0, snapshot[index].X);
+            Assert.Equal(0, snapshot[index].Y);
+            Assert.Equal(width, snapshot[index].Width);
+            Assert.Equal(height, snapshot[index].Height);
+        }
+
+        // 画面完整性从未异常，因此不应产生任何全帧重同步。
+        Assert.Equal(0, client.FullResyncCount);
+        Assert.Equal(0, client.IntegrityFaultCount);
+    }
+
+    [Fact]
+    public async Task 常驻挂起请求_服务端静默时客户端不再补发且请求保持挂起()
+    {
+        const int width = 16;
+        const int height = 16;
+        byte[] pixels = new byte[width * height * 4];
+        Array.Fill(pixels, (byte)0x11);
+
+        var secondRequestArrived = new TaskCompletionSource<bool>();
+        var idleWindowElapsed = new TaskCompletionSource<bool>();
+
+        await using var server = FakeVncServer.CreateStandard(width, height, "idle-desktop", async conn =>
+        {
+            var first = await conn.ReceiveFramebufferUpdateRequestAsync();
+            Assert.Equal(0, first.Incremental);
+            await conn.SendRawFrameAsync(width, height, pixels);
+
+            await conn.ReceiveFramebufferUpdateRequestAsync();
+            secondRequestArrived.TrySetResult(true);
+
+            // 服务端此后静默：挂起请求若被正确保持，客户端不应再发出任何请求。
+            await Task.Delay(TimeSpan.FromMilliseconds(700));
+            idleWindowElapsed.TrySetResult(true);
+        });
+
+        var frames = new ProjectionFrameStore(width, height);
+        await using var client = new VncClient();
+        await client.ConnectAsync(server.Port, frames);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = Task.Run(() => client.RunFrameLoopAsync(frames, cts.Token));
+
+        await idleWindowElapsed.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        Assert.True(secondRequestArrived.Task.IsCompletedSuccessfully);
+        Assert.Equal(1, frames.Sequence);
+    }
+
+    [Fact]
+    public async Task 解码矩形越界_消费像素保持流同步并补发非增量请求做全帧重同步()
+    {
+        const int width = 8;
+        const int height = 8;
+        byte[] pixels = new byte[width * height * 4];
+        Array.Fill(pixels, (byte)0x33);
+
+        var requests = new List<byte>();
+        var sessionAlive = new TaskCompletionSource<bool>();
+
+        await using var server = FakeVncServer.CreateStandard(width, height, "bounds-desktop", async conn =>
+        {
+            // 首帧：矩形右边界越界一列。
+            requests.Add((await conn.ReceiveFramebufferUpdateRequestAsync()).Incremental);
+            await conn.SendRawFrameAsync(new FakeVncConnection.RawRect(0, 0, width, height, 0x33));
+            await conn.SendRawFrameAsync(new FakeVncConnection.RawRect(width - 1, 0, 2, height, 0x44));
+
+            // 会话必须继续：随后仍能读到客户端补发的请求与正常帧。
+            requests.Add((await conn.ReceiveFramebufferUpdateRequestAsync()).Incremental);
+            await conn.SendRawFrameAsync(width, height, pixels);
+            requests.Add((await conn.ReceiveFramebufferUpdateRequestAsync()).Incremental);
+
+            sessionAlive.TrySetResult(true);
+        });
+
+        var frames = new ProjectionFrameStore(width, height);
+        await using var client = new VncClient();
+        await client.ConnectAsync(server.Port, frames);
+
+        var lastFrameDecoded = new TaskCompletionSource<bool>();
+        client.FrameDecoded += (_, args) =>
+        {
+            if (args.Sequence == 2)
+            {
+                lastFrameDecoded.TrySetResult(true);
+            }
+        };
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = Task.Run(() => client.RunFrameLoopAsync(frames, cts.Token));
+
+        await sessionAlive.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await lastFrameDecoded.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        byte[] observed;
+        lock (requests)
+        {
+            observed = requests.ToArray();
+        }
+
+        Assert.Equal(new byte[] { 0, 1, 0 }, observed);
+        Assert.Equal(1, client.IntegrityFaultCount);
+        Assert.Equal(1, client.FullResyncCount);
+        Assert.NotNull(client.LastIntegrityFault);
+        Assert.Contains("超出画面范围", client.LastIntegrityFault);
+
+        // 越界帧没有任何像素落进帧缓冲，因此不占用画面序号；序号只由前后两帧合法矩形推进。
+        ProjectionFrame? snapshot = frames.CaptureLatest();
+        Assert.NotNull(snapshot);
+        Assert.Equal(2, snapshot.Sequence);
+    }
+
+    [Fact]
+    public async Task 单帧多矩形越界_只补发一次全帧重同步并累计异常次数()
+    {
+        const int width = 8;
+        const int height = 8;
+        byte[] pixels = new byte[width * height * 4];
+
+        var requests = new List<byte>();
+        var done = new TaskCompletionSource<bool>();
+
+        await using var server = FakeVncServer.CreateStandard(width, height, "multibounds-desktop", async conn =>
+        {
+            requests.Add((await conn.ReceiveFramebufferUpdateRequestAsync()).Incremental);
+
+            await conn.SendRawFrameAsync(
+                new FakeVncConnection.RawRect(0, 0, width, height),
+                new FakeVncConnection.RawRect(0, height, 1, 1),
+                new FakeVncConnection.RawRect(width, 0, 1, 1));
+
+            requests.Add((await conn.ReceiveFramebufferUpdateRequestAsync()).Incremental);
+            await conn.SendRawFrameAsync(width, height, pixels);
+            requests.Add((await conn.ReceiveFramebufferUpdateRequestAsync()).Incremental);
+            done.TrySetResult(true);
+        });
+
+        var frames = new ProjectionFrameStore(width, height);
+        await using var client = new VncClient();
+        await client.ConnectAsync(server.Port, frames);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = Task.Run(() => client.RunFrameLoopAsync(frames, cts.Token));
+
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        byte[] observed;
+        lock (requests)
+        {
+            observed = requests.ToArray();
+        }
+
+        Assert.Equal(new byte[] { 0, 0, 1 }, observed);
+        Assert.Equal(2, client.IntegrityFaultCount);
+        Assert.Equal(1, client.FullResyncCount);
+    }
+
+    [Fact]
+    public async Task 分辨率变化后_下一次请求为非增量以重建整屏画面()
+    {
+        const int w1 = 8;
+        const int h1 = 8;
+        const int w2 = 12;
+        const int h2 = 10;
+        byte[] pixels = new byte[w2 * h2 * 4];
+
+        var requests = new List<(byte Incremental, int Width, int Height)>();
+        var done = new TaskCompletionSource<bool>();
+
+        await using var server = FakeVncServer.CreateStandard(w1, h1, "resize-resync-desktop", async conn =>
+        {
+            var first = await conn.ReceiveFramebufferUpdateRequestAsync();
+            lock (requests)
+            {
+                requests.Add((first.Incremental, first.Width, first.Height));
+            }
+
+            await conn.SendResolutionChangeAsync(w2, h2);
+
+            var second = await conn.ReceiveFramebufferUpdateRequestAsync();
+            lock (requests)
+            {
+                requests.Add((second.Incremental, second.Width, second.Height));
+            }
+
+            await conn.SendRawFrameAsync(w2, h2, pixels);
+            await conn.ReceiveFramebufferUpdateRequestAsync();
+            done.TrySetResult(true);
+        });
+
+        var frames = new ProjectionFrameStore(w1, h1);
+        await using var client = new VncClient();
+        await client.ConnectAsync(server.Port, frames);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var loop = Task.Run(() => client.RunFrameLoopAsync(frames, cts.Token));
+
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        cts.Cancel();
+        try
+        {
+            await loop;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        (byte Incremental, int Width, int Height)[] observed;
+        lock (requests)
+        {
+            observed = requests.ToArray();
+        }
+
+        Assert.Equal(2, observed.Length);
+        Assert.Equal(0, observed[0].Incremental);
+        Assert.Equal(0, observed[1].Incremental);
+        Assert.Equal(w2, observed[1].Width);
+        Assert.Equal(h2, observed[1].Height);
+        Assert.Equal(1, client.FullResyncCount);
+        Assert.Equal(0, client.IntegrityFaultCount);
+    }
 }

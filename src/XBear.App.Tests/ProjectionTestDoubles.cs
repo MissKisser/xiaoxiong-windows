@@ -204,6 +204,9 @@ internal sealed class StubProjectionService : IProjectionService
         _injectors.TryGetValue(instanceId, out ProjectionInputInjector? injector) ? injector : null;
 
     /// <inheritdoc />
+    public ProjectionStreamDiagnostics? GetStreamDiagnostics(string instanceId) => null;
+
+    /// <inheritdoc />
     public ValueTask DisposeAsync()
     {
         DisposeCount++;

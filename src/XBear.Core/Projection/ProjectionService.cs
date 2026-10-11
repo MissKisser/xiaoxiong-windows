@@ -44,6 +44,25 @@ public sealed record ProjectionSessionStateChangedEventArgs(
     Exception? Error = null);
 
 /// <summary>
+/// 投屏取帧链路的诊断快照，用于回答「画面为什么还没到」这类问题。
+/// </summary>
+/// <param name="FullResyncCount">已发出的全帧重同步次数；持续增长说明画面频繁越界或反复改变分辨率。</param>
+/// <param name="IntegrityFaultCount">本次会话观察到的画面完整性异常次数。</param>
+/// <param name="LastIntegrityFault">最近一次完整性异常的描述，无异常时为 null。</param>
+/// <param name="KeepaliveActive">实例内保活损伤循环是否在运行。</param>
+/// <param name="KeepaliveFrequencyHz">保活损伤的节拍频率，单位 Hz。</param>
+/// <param name="KeepalivePid">实例内损伤循环的进程号，未运行时为 null。</param>
+/// <param name="KeepaliveError">最近一次保活启停失败的原因，未失败时为 null。</param>
+public sealed record ProjectionStreamDiagnostics(
+    int FullResyncCount,
+    int IntegrityFaultCount,
+    string? LastIntegrityFault,
+    bool KeepaliveActive,
+    int KeepaliveFrequencyHz,
+    int? KeepalivePid,
+    string? KeepaliveError);
+
+/// <summary>
 /// 投屏服务接口。负责按运行中实例的端口建立投屏会话、接收画面帧、
 /// 统计实测帧率，并提供输入注入能力与画面观察接口。
 /// </summary>
@@ -106,6 +125,11 @@ public interface IProjectionService : IAsyncDisposable
     /// <param name="instanceId">实例标识。</param>
     /// <returns>输入注入入口，无活动会话时为 null。</returns>
     ProjectionInputInjector? GetInputInjector(string instanceId);
+
+    /// <summary>获取指定实例取帧链路与保活通道的诊断快照。</summary>
+    /// <param name="instanceId">实例标识。</param>
+    /// <returns>诊断快照，无活动会话时为 null。</returns>
+    ProjectionStreamDiagnostics? GetStreamDiagnostics(string instanceId);
 }
 
 /// <summary>
@@ -124,6 +148,21 @@ public sealed class ProjectionServiceOptions
 
     /// <summary>指针坐标域上界，默认 virtio-tablet 的 32767。</summary>
     public int PointerMax { get; init; } = ProjectionInputInjector.DefaultPointerMax;
+
+    /// <summary>
+    /// 是否在会话存续期间启动实例内保活损伤循环，默认启动。
+    /// 保活只是把服务端刷新周期压低，取帧与交互在关闭时依然可用，只是画面到达更慢。
+    /// </summary>
+    public bool KeepaliveEnabled { get; init; } = true;
+
+    /// <summary>保活损伤的节拍频率，单位 Hz；为 null 时使用保活默认值。</summary>
+    public int? KeepaliveFrequencyHz { get; init; }
+
+    /// <summary>保活通道的单条 adb 命令等待上限。</summary>
+    public TimeSpan? KeepaliveCommandTimeout { get; init; }
+
+    /// <summary>保活启动后确认循环存活的等待上限。</summary>
+    public TimeSpan? KeepaliveStartupProbeTimeout { get; init; }
 }
 
 /// <summary>
@@ -142,6 +181,8 @@ public sealed class ProjectionService : IProjectionService
         public IQmpClient Qmp { get; }
         public bool OwnsQmp { get; }
         public ProjectionInputInjector Injector { get; }
+        public IAdbClient? Adb { get; set; }
+        public ProjectionKeepalive? Keepalive { get; set; }
         public CancellationTokenSource LoopCancellation { get; } = new();
         public Task? LoopTask { get; set; }
         public Exception? TerminalError { get; set; }
@@ -189,6 +230,27 @@ public sealed class ProjectionService : IProjectionService
 
         public async ValueTask DisposeResourcesAsync()
         {
+            if (Keepalive is { } keepalive)
+            {
+                try
+                {
+                    await keepalive.StopAsync().ConfigureAwait(false);
+                }
+                catch (Exception)
+                {
+                    // 保活清理失败不应阻断取帧链路的资源释放。
+                }
+
+                await keepalive.DisposeAsync().ConfigureAwait(false);
+                Keepalive = null;
+            }
+
+            if (Adb is { } adb)
+            {
+                await adb.DisposeAsync().ConfigureAwait(false);
+                Adb = null;
+            }
+
             await Vnc.DisposeAsync().ConfigureAwait(false);
 
             if (OwnsQmp)
@@ -204,6 +266,7 @@ public sealed class ProjectionService : IProjectionService
     private readonly Func<string, InstanceState>? _stateResolver;
     private readonly Func<IQmpClient> _qmpClientFactory;
     private readonly Func<VncClientOptions?, VncClient> _vncClientFactory;
+    private readonly Func<IAdbClient>? _adbClientFactory;
     private readonly ProjectionServiceOptions _options;
 
     private readonly ConcurrentDictionary<string, InstanceProjectionContext> _contexts =
@@ -227,13 +290,18 @@ public sealed class ProjectionService : IProjectionService
     /// <param name="stateResolver">按实例标识查询运行态的委托，为空时不预检运行态。</param>
     /// <param name="qmpClientFactory">QMP 客户端工厂，为空时使用默认构造。</param>
     /// <param name="vncClientFactory">VNC 客户端工厂，为空时使用默认构造。</param>
+    /// <param name="adbClientFactory">
+    /// adb 客户端工厂，用于在会话存续期间维护实例内的保活损伤通道；
+    /// 为空时保活通道不会启动，投屏其余能力不受影响。
+    /// </param>
     /// <param name="options">服务配置参数，为空时使用默认配置。</param>
     public ProjectionService(
         Func<string, AllocatedPorts?> portResolver,
         Func<string, InstanceState>? stateResolver = null,
         Func<IQmpClient>? qmpClientFactory = null,
         Func<VncClientOptions?, VncClient>? vncClientFactory = null,
-        ProjectionServiceOptions? options = null)
+        ProjectionServiceOptions? options = null,
+        Func<IAdbClient>? adbClientFactory = null)
     {
         ArgumentNullException.ThrowIfNull(portResolver);
 
@@ -242,6 +310,7 @@ public sealed class ProjectionService : IProjectionService
         _qmpClientFactory = qmpClientFactory ?? (static () => new QmpClient());
         _vncClientFactory = vncClientFactory ?? (static opts => new VncClient(opts));
         _options = options ?? new ProjectionServiceOptions();
+        _adbClientFactory = adbClientFactory;
     }
 
     /// <summary>
@@ -400,6 +469,8 @@ public sealed class ProjectionService : IProjectionService
 
             _contexts[instanceId] = context;
 
+            await StartKeepaliveAsync(context, ports, cancellationToken).ConfigureAwait(false);
+
             context.LoopTask = Task.Run(
                 () => RunFrameLoopWorkerAsync(context),
                 CancellationToken.None);
@@ -508,6 +579,26 @@ public sealed class ProjectionService : IProjectionService
             : null;
     }
 
+    /// <inheritdoc />
+    public ProjectionStreamDiagnostics? GetStreamDiagnostics(string instanceId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(instanceId);
+        if (!_contexts.TryGetValue(instanceId, out InstanceProjectionContext? context))
+        {
+            return null;
+        }
+
+        ProjectionKeepalive? keepalive = context.Keepalive;
+        return new ProjectionStreamDiagnostics(
+            context.Vnc.FullResyncCount,
+            context.Vnc.IntegrityFaultCount,
+            context.Vnc.LastIntegrityFault,
+            keepalive?.IsActive ?? false,
+            keepalive?.FrequencyHz ?? 0,
+            keepalive?.Pid,
+            keepalive?.LastError);
+    }
+
     /// <summary>
     /// 释放全部进行中的投屏会话并等待清理完成。
     /// </summary>
@@ -548,6 +639,50 @@ public sealed class ProjectionService : IProjectionService
         }
 
         GC.SuppressFinalize(this);
+    }
+
+    /// <summary>
+    /// 拉起实例内的保活损伤通道。保活只影响画面到达的快慢，
+    /// 因此连接失败或通道启动失败都不阻断投屏会话本身，失败原因记入诊断快照。
+    /// </summary>
+    /// <param name="context">本次会话的上下文。</param>
+    /// <param name="ports">实例已分配的端口组。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    private async Task StartKeepaliveAsync(
+        InstanceProjectionContext context,
+        AllocatedPorts ports,
+        CancellationToken cancellationToken)
+    {
+        if (!_options.KeepaliveEnabled || _adbClientFactory is null)
+        {
+            return;
+        }
+
+        IAdbClient adb = _adbClientFactory();
+        try
+        {
+            await adb.ConnectAsync(ports.Adb, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is XBearException or IOException or ObjectDisposedException)
+        {
+            await adb.DisposeAsync().ConfigureAwait(false);
+            return;
+        }
+
+        var keepalive = new ProjectionKeepalive(
+            adb,
+            ports.Adb,
+            new ProjectionKeepaliveOptions
+            {
+                FrequencyHz = _options.KeepaliveFrequencyHz,
+                CommandTimeout = _options.KeepaliveCommandTimeout,
+                StartupProbeTimeout = _options.KeepaliveStartupProbeTimeout,
+            });
+
+        context.Adb = adb;
+        context.Keepalive = keepalive;
+
+        await keepalive.StartAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task RunFrameLoopWorkerAsync(InstanceProjectionContext context)

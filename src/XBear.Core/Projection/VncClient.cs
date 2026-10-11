@@ -22,10 +22,13 @@ internal static class Rfb
     /// <summary>会话共享标志：与其他连接共享同一画面。</summary>
     public const byte SharedFlag = 1;
 
-    /// <summary>帧缓冲更新请求：仅请求发生变化的部分。</summary>
-    public const byte FramebufferUpdateRequestIncremental = 3;
+    /// <summary>帧缓冲更新请求的消息类型。</summary>
+    public const byte FramebufferUpdateRequestMessageType = 3;
 
-    /// <summary>帧缓冲更新请求：请求整个画面。</summary>
+    /// <summary>帧缓冲更新请求的增量标志：非零表示只请求发生变化的部分。</summary>
+    public const byte FramebufferUpdateRequestIncremental = 1;
+
+    /// <summary>帧缓冲更新请求的整屏标志：零表示请求整个画面。</summary>
     public const byte FramebufferUpdateRequestFull = 0;
 
     /// <summary>服务端消息：帧缓冲更新。</summary>
@@ -90,6 +93,12 @@ public sealed class VncClient : IAsyncDisposable
     private const int ReadBufferSize = 64 * 1024;
     private const int MaxSecurityReasonLength = 4096;
 
+    /// <summary>
+    /// 会话内累计完整性异常达到该条数即视为帧缓冲可能已与画面失步，
+    /// 触发一次全帧重同步。
+    /// </summary>
+    public const int IntegrityFaultResyncThreshold = 8;
+
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(10);
 
     private readonly VncClientOptions _options;
@@ -100,6 +109,12 @@ public sealed class VncClient : IAsyncDisposable
     private byte[] _readBuffer;
     private byte[] _pixelBuffer;
     private int _disposed;
+
+    private int _resyncPending;
+    private int _faultsSinceResync;
+    private int _fullResyncCount;
+    private int _integrityFaultCount;
+    private string? _lastIntegrityFault;
 
     /// <summary>
     /// 创建取帧客户端。
@@ -120,6 +135,15 @@ public sealed class VncClient : IAsyncDisposable
 
     /// <summary>每一帧解码完成时触发。</summary>
     public event EventHandler<VncFrameDecoded>? FrameDecoded;
+
+    /// <summary>已发出的全帧重同步请求次数，用于诊断画面是否长期健康。</summary>
+    public int FullResyncCount => Volatile.Read(ref _fullResyncCount);
+
+    /// <summary>本次会话观察到的画面完整性异常次数。</summary>
+    public int IntegrityFaultCount => Volatile.Read(ref _integrityFaultCount);
+
+    /// <summary>最近一次画面完整性异常的描述，无异常时为 null。</summary>
+    public string? LastIntegrityFault => Volatile.Read(ref _lastIntegrityFault);
 
     /// <summary>
     /// 连接实例的 VNC 端口，完成版本与安全类型协商、像素格式与编码协商，
@@ -186,6 +210,14 @@ public sealed class VncClient : IAsyncDisposable
 
     /// <summary>
     /// 持续请求画面更新并把原始像素解码进帧缓冲，直到取消令牌被触发或连接中断。
+    ///
+    /// 取帧纪律为「常驻挂起」：任一时刻恰好保持一条未应答的增量 FramebufferUpdateRequest。
+    /// 首帧用非增量请求取整屏，之后每读完一条 FramebufferUpdate 的全部字节就立即补发下一条请求，
+    /// 补发发生在画面到达通知之前，因此下游的事件处理耗时不会拉长请求的空窗。
+    /// 服务端的推送由自适应刷新定时器驱动，只有在它扫描到真实损伤且此刻存在挂起请求时才会立即推送，
+    /// 挂起请求因此是这条链路上唯一由客户端掌握、且直接决定画面到达快慢的开关。
+    ///
+    /// 解码过程中若发现矩形越界或累计异常达到阈值，会自动改发一条非增量请求做全帧重同步。
     /// </summary>
     /// <param name="frames">承载本次投屏取帧的帧缓冲。</param>
     /// <param name="cancellationToken">取消令牌。</param>
@@ -199,8 +231,6 @@ public sealed class VncClient : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         ArgumentNullException.ThrowIfNull(frames);
-
-        NetworkStream stream = RequireStream();
 
         await WriteAsync(
             BuildFramebufferUpdateRequest(frames.Geometry, Rfb.FramebufferUpdateRequestFull),
@@ -220,22 +250,26 @@ public sealed class VncClient : IAsyncDisposable
                 throw Disconnected(ex);
             }
 
-            switch (messageType)
+            if (messageType == Rfb.ServerFramebufferUpdate)
             {
-                case Rfb.ServerFramebufferUpdate:
+                long previousSequence = frames.Sequence;
+                long sequence = await ReadFramebufferUpdateAsync(frames, cancellationToken)
+                    .ConfigureAwait(false);
+
+                await SendPendingUpdateRequestAsync(frames, cancellationToken).ConfigureAwait(false);
+
+                if (sequence > previousSequence)
                 {
-                    long previousSequence = frames.Sequence;
-                    long sequence = await ReadFramebufferUpdateAsync(stream, frames, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (sequence > previousSequence)
-                    {
-                        FrameDecoded?.Invoke(
-                            this,
-                            new VncFrameDecoded(sequence, frames.Geometry, DateTimeOffset.UtcNow));
-                    }
-                    break;
+                    FrameDecoded?.Invoke(
+                        this,
+                        new VncFrameDecoded(sequence, frames.Geometry, DateTimeOffset.UtcNow));
                 }
 
+                continue;
+            }
+
+            switch (messageType)
+            {
                 case Rfb.ServerSetColourMapEntries:
                     await SkipColourMapEntriesAsync(cancellationToken).ConfigureAwait(false);
                     break;
@@ -253,10 +287,6 @@ public sealed class VncClient : IAsyncDisposable
                         $"收到未知的 VNC 服务端消息类型 {messageType}。",
                         "请确认实例的 VNC 服务端实现符合 RFB 3.8 协议。");
             }
-
-            await WriteAsync(
-                BuildFramebufferUpdateRequest(frames.Geometry, Rfb.FramebufferUpdateRequestIncremental),
-                cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -371,8 +401,53 @@ public sealed class VncClient : IAsyncDisposable
             Encoding.UTF8.GetString(nameBytes));
     }
 
+    /// <summary>
+    /// 补发下一条挂起的帧缓冲更新请求。常规路径发增量请求；
+    /// 当本帧出现过越界矩形或累计异常达到阈值时改发非增量请求，
+    /// 让服务端把整屏重新推一遍，使帧缓冲与画面重新对齐。
+    /// </summary>
+    /// <param name="frames">承载画面的帧缓冲，取其当前几何作为请求范围。</param>
+    /// <param name="cancellationToken">取消令牌。</param>
+    private async Task SendPendingUpdateRequestAsync(
+        ProjectionFrameStore frames,
+        CancellationToken cancellationToken)
+    {
+        bool fullResync =
+            _resyncPending != 0 ||
+            _faultsSinceResync >= IntegrityFaultResyncThreshold;
+
+        byte incremental = fullResync
+            ? Rfb.FramebufferUpdateRequestFull
+            : Rfb.FramebufferUpdateRequestIncremental;
+
+        await WriteAsync(
+            BuildFramebufferUpdateRequest(frames.Geometry, incremental),
+            cancellationToken).ConfigureAwait(false);
+
+        if (!fullResync)
+        {
+            return;
+        }
+
+        _resyncPending = 0;
+        _faultsSinceResync = 0;
+        Interlocked.Increment(ref _fullResyncCount);
+    }
+
+    /// <summary>
+    /// 登记一次画面完整性异常。异常本身不终止会话：
+    /// 越界矩形的像素照常消费以保证字节流不错位，随后由挂起请求触发全帧重同步。
+    /// </summary>
+    /// <param name="detail">异常描述，供诊断查看。</param>
+    private void RecordIntegrityFault(string detail)
+    {
+        _resyncPending = 1;
+        _faultsSinceResync++;
+        Volatile.Write(ref _lastIntegrityFault, detail);
+        Interlocked.Increment(ref _integrityFaultCount);
+    }
+
     private async Task<long> ReadFramebufferUpdateAsync(
-        NetworkStream stream,
         ProjectionFrameStore frames,
         CancellationToken cancellationToken)
     {
@@ -395,9 +470,10 @@ public sealed class VncClient : IAsyncDisposable
             switch (encoding)
             {
                 case Rfb.EncodingRaw:
-                    await ReadRawRectangleAsync(frames, x, y, width, height, cancellationToken)
+                    // 越界矩形只做像素消费而不参与解码，不应被计入「本帧画面已更新」，
+                    // 否则帧缓冲内容未变却凭空发布一个新画面序号，实测帧率会被虚高。
+                    hasPixelUpdate |= await ReadRawRectangleAsync(frames, x, y, width, height, cancellationToken)
                         .ConfigureAwait(false);
-                    hasPixelUpdate = true;
                     break;
 
                 case Rfb.PseudoEncodingDesktopSize:
@@ -431,6 +507,9 @@ public sealed class VncClient : IAsyncDisposable
 
         if (resolutionChanged)
         {
+            // 帧缓冲随分辨率被重建，其中的像素不再对应任何已收到的画面内容，
+            // 必须由随后的一次全帧重同步把整屏重新铺满。
+            _resyncPending = 1;
             ResolutionChanged?.Invoke(this, new VncResolutionChanged(previous, frames.Geometry));
         }
 
@@ -487,7 +566,7 @@ public sealed class VncClient : IAsyncDisposable
         return new ScreenGeometry(announcedWidth, announcedHeight);
     }
 
-    private async Task ReadRawRectangleAsync(
+    private async Task<bool> ReadRawRectangleAsync(
         ProjectionFrameStore frames,
         int x,
         int y,
@@ -497,18 +576,24 @@ public sealed class VncClient : IAsyncDisposable
     {
         if (width == 0 || height == 0)
         {
-            return;
-        }
-
-        if (x < 0 || y < 0 || x + width > frames.Width || y + height > frames.Height)
-        {
-            throw ProtocolError(
-                $"VNC 服务端下发的画面更新矩形超出画面范围：({x}, {y}) {width}×{height}，画面为 {frames.Width}×{frames.Height}。",
-                "请确认实例的显示分辨率与 VNC 服务端一致。");
+            return false;
         }
 
         RfbPixelFormat format = RfbPixelFormat.ProjectionBgra32;
         int bytesPerPixel = format.BytesPerPixel;
+        long payloadBytes = (long)width * height * bytesPerPixel;
+
+        if (x < 0 || y < 0 || x + width > frames.Width || y + height > frames.Height)
+        {
+            // 越界矩形不参与解码，但其像素必须照常消费：少读会让整条流永久失步，
+            // 投屏会立刻中断。改由挂起请求触发一次全帧重同步来修复该区域。
+            RecordIntegrityFault(
+                $"画面更新矩形超出画面范围：({x}, {y}) {width}×{height}，画面为 {frames.Width}×{frames.Height}。");
+
+            await SkipAsync(payloadBytes, cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+
         int rowBytes = checked(width * bytesPerPixel);
         EnsurePixelCapacity(rowBytes);
 
@@ -519,6 +604,8 @@ public sealed class VncClient : IAsyncDisposable
             await ReadExactlyIntoAsync(rowSource.AsMemory(0, rowBytes), cancellationToken).ConfigureAwait(false);
             DecodeRowToFrames(frames, rowSource, rowBytes, y + row, x, width, format);
         }
+
+        return true;
     }
 
     private static void DecodeRowToFrames(
@@ -770,7 +857,7 @@ public sealed class VncClient : IAsyncDisposable
     private static byte[] BuildFramebufferUpdateRequest(ScreenGeometry geometry, byte incremental)
     {
         var payload = new byte[10];
-        payload[0] = Rfb.FramebufferUpdateRequestIncremental; // type = 3
+        payload[0] = Rfb.FramebufferUpdateRequestMessageType;
         payload[1] = incremental;
         // x = 0, y = 0
         BinaryPrimitives.WriteUInt16BigEndian(payload.AsSpan(2, 2), 0);

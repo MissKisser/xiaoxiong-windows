@@ -234,7 +234,7 @@ public sealed class FileTransferService
         task.Start(totalBytes, currentEntry);
         NotifyStateChanged(task, FileTransferState.Queued, FileTransferState.Running);
 
-        var progressHandler = (IProgress<long>)new Progress<long>(transferred =>
+        var progressHandler = OrderedProgress<long>.Create(transferred =>
         {
             task.ReportProgress(transferred, currentEntry);
             NotifyProgress(task);
@@ -362,7 +362,7 @@ public sealed class FileTransferService
             Directory.CreateDirectory(hostDir);
         }
 
-        var progressHandler = (IProgress<long>)new Progress<long>(transferred =>
+        var progressHandler = OrderedProgress<long>.Create(transferred =>
         {
             task.ReportProgress(transferred, currentEntry);
             NotifyProgress(task);
@@ -514,6 +514,67 @@ public sealed class FileTransferService
         catch
         {
             // 清理半成品属于最佳努力，不掩盖原始异常
+        }
+    }
+
+    /// <summary>
+    /// 保序的进度接收端：存在同步上下文时按上下文队列保序派发，
+    /// 不存在时直接在报告线程上回调。
+    /// 直接使用 <see cref="Progress{T}"/> 会把每一次报告独立投递给线程池，
+    /// 各次回调的执行次序不保证，接收端会看到字节数回退。
+    /// </summary>
+    /// <typeparam name="T">进度值的类型。</typeparam>
+    private sealed class OrderedProgress<T> : IProgress<T>
+    {
+        private readonly Action<T> _handler;
+        private readonly SynchronizationContext? _context;
+
+        private OrderedProgress(Action<T> handler, SynchronizationContext? context)
+        {
+            _handler = handler;
+            _context = context;
+        }
+
+        /// <summary>
+        /// 创建保序进度接收端。
+        /// </summary>
+        /// <param name="handler">进度回调。</param>
+        /// <returns>保序进度接收端。</returns>
+        public static IProgress<T> Create(Action<T> handler)
+        {
+            ArgumentNullException.ThrowIfNull(handler);
+            return new OrderedProgress<T>(handler, SynchronizationContext.Current);
+        }
+
+        /// <summary>
+        /// 保序派发时携带的进度值。
+        /// </summary>
+        /// <param name="Handler">进度回调。</param>
+        /// <param name="Value">进度值。</param>
+        private sealed record ProgressPayload(Action<T> Handler, T Value);
+
+        /// <summary>
+        /// 报告一次进度。
+        /// </summary>
+        /// <param name="value">进度值。</param>
+        public void Report(T value)
+        {
+            if (_context is null)
+            {
+                _handler(value);
+                return;
+            }
+
+            var payload = new ProgressPayload(_handler, value);
+            _context.Post(
+                static state =>
+                {
+                    if (state is ProgressPayload typed)
+                    {
+                        typed.Handler(typed.Value);
+                    }
+                },
+                payload);
         }
     }
 
