@@ -28,6 +28,8 @@ namespace XBear.App.Services;
 /// <param name="RootStealth">是否启用 root 痕迹去明文持久化（A-16，消除 local.prop 明文，仅运行时断言）。</param>
 /// <param name="CleanupKernelSuRemnants">是否清理非本产品的 KernelSU 遗留目录与二进制（A-14/Q-02）。</param>
 /// <param name="EmbeddedSrc">内嵌的安装态 SRC 标记（A-13，消除可见 cmdline 中的 SRC= 参数）。</param>
+/// <param name="ModulesReleaseAlias">内核版本串别名（去指纹内核版本串配套的模块目录条目名）。</param>
+/// <param name="HardwareAlias">硬件代号别名（去指纹硬件代号配套的 init rc 软链别名）。</param>
 public sealed record InitrdCustomizationPolicy(
     int AdbGuestPort,
     string AdbPublicKey,
@@ -43,8 +45,22 @@ public sealed record InitrdCustomizationPolicy(
     string? DefaultGateway = null,
     bool RootStealth = false,
     bool CleanupKernelSuRemnants = false,
-    string? EmbeddedSrc = null)
+    string? EmbeddedSrc = null,
+    string? ModulesReleaseAlias = null,
+    string? HardwareAlias = null)
 {
+    /// <summary>
+    /// 是否启用模块目录版本串别名定制项。
+    /// 该项为空时完全等价于未启用，不影响既有产物的指纹与幂等判定。
+    /// </summary>
+    public bool ModulesReleaseAliasEnabled => !string.IsNullOrWhiteSpace(ModulesReleaseAlias);
+
+    /// <summary>
+    /// 是否启用硬件代号 init rc 别名定制项。
+    /// 该项为空时完全等价于未启用，不影响既有产物的指纹与幂等判定。
+    /// </summary>
+    public bool HardwareAliasEnabled => !string.IsNullOrWhiteSpace(HardwareAlias);
+
     /// <summary>
     /// 是否启用了任何抗取证扩展定制项。
     /// 当全部为默认关闭值时，指纹计算完全等价于传统策略，确保已有镜像产物不被误判二次定制。
@@ -59,7 +75,9 @@ public sealed record InitrdCustomizationPolicy(
         !string.IsNullOrWhiteSpace(DefaultGateway) ||
         RootStealth ||
         CleanupKernelSuRemnants ||
-        !string.IsNullOrWhiteSpace(EmbeddedSrc);
+        !string.IsNullOrWhiteSpace(EmbeddedSrc) ||
+        ModulesReleaseAliasEnabled ||
+        HardwareAliasEnabled;
 
     /// <summary>
     /// 便捷工厂方法：按画像与身份对象构建全套抗取证定制策略。
@@ -77,6 +95,8 @@ public sealed record InitrdCustomizationPolicy(
     /// <param name="cleanupKernelSuRemnants">是否清理残缺 KernelSU 痕迹。</param>
     /// <param name="renameInterfaceToWlan0">是否重命名网络接口为 wlan0。</param>
     /// <param name="enableRenderSpoofing">是否启用渲染伪装，默认 false（Q-06 默认保守）。</param>
+    /// <param name="modulesReleaseAlias">内核版本串别名，为空表示不启用模块目录别名定制项。</param>
+    /// <param name="hardwareAlias">硬件代号别名，为空表示使用画像的 Device 代号建立硬件 rc 软链。</param>
     /// <returns>抗取证 initrd 定制策略。</returns>
     public static InitrdCustomizationPolicy CreateAntiforensicsPolicy(
         int adbGuestPort,
@@ -91,7 +111,9 @@ public sealed record InitrdCustomizationPolicy(
         bool enableModuleLoader = true,
         bool cleanupKernelSuRemnants = true,
         bool renameInterfaceToWlan0 = true,
-        bool enableRenderSpoofing = false)
+        bool enableRenderSpoofing = false,
+        string? modulesReleaseAlias = null,
+        string? hardwareAlias = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
 
@@ -116,7 +138,9 @@ public sealed record InitrdCustomizationPolicy(
             DefaultGateway: defaultGateway,
             RootStealth: rootStealth,
             CleanupKernelSuRemnants: cleanupKernelSuRemnants,
-            EmbeddedSrc: embeddedSrc);
+            EmbeddedSrc: embeddedSrc,
+            ModulesReleaseAlias: modulesReleaseAlias,
+            HardwareAlias: hardwareAlias ?? profile.Device);
     }
 }
 
@@ -319,11 +343,48 @@ public sealed class InitrdCustomizerService
             parts.Add(policy.RootStealth ? "root_stealth:1" : "root_stealth:0");
             parts.Add(policy.CleanupKernelSuRemnants ? "ksu_clean:1" : "ksu_clean:0");
             parts.Add(!string.IsNullOrWhiteSpace(policy.EmbeddedSrc) ? $"src:{policy.EmbeddedSrc.Trim()}" : "src:none");
+            parts.Add(policy.ModulesReleaseAliasEnabled
+                ? $"modules_alias:{NormalizeModulesReleaseAlias(policy.ModulesReleaseAlias)}"
+                : "modules_alias:none");
+            parts.Add(policy.HardwareAliasEnabled
+                ? $"hw_alias:{NormalizeModulesReleaseAlias(policy.HardwareAlias)}"
+                : "hw_alias:none");
         }
 
         string material = string.Join("\n", parts);
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)))
             .ToLowerInvariant();
+    }
+
+    /// <summary>
+    /// 归一化并校验内核版本串别名。
+    /// 该值会被拼进注入到 init 脚本的 shell 字面量，因此只接受内核版本串的合法字符集，
+    /// 任何可能改变脚本语义的字符（引号、变量展开、路径分隔、相对路径段）一律拒绝，
+    /// 在宿主侧提前失败优于产出无法引导的实例。
+    /// </summary>
+    /// <param name="value">待校验的版本串，可为空。</param>
+    /// <returns>去除首尾空白后的版本串；空白输入返回 null。</returns>
+    /// <exception cref="XBearException">版本串含非法字符时抛出。</exception>
+    public static string? NormalizeModulesReleaseAlias(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        string normalized = value.Trim();
+
+        if (normalized.Contains("..", StringComparison.Ordinal) ||
+            normalized.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '-' or '_' or '+')))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"模块目录版本串别名含非法字符：{normalized}",
+                "版本串只能包含字母、数字与 . - _ + 四类符号，且不得包含 ..，" +
+                "例如 6.1.112-android11-perf。该值会拼入引导脚本的字面量，需与内核 uname -r 输出一致。");
+        }
+
+        return normalized;
     }
 
     /// <summary>
@@ -683,22 +744,133 @@ public sealed class InitrdCustomizerService
             lines.Add("# 覆写需覆盖全部分区的 prop 文件：属性服务按 system → vendor → odm → product →");
             lines.Add("# system_ext 的顺序依次载入，后者覆盖前者，只追加 system 会被其余分区回写。");
             lines.Add("if [ -f /etc/build.prop.override ]; then");
+            lines.Add("\t[ -f /tmp/device.prop ] && > /tmp/device.prop 2>/dev/null");
             lines.Add("\tfor target in /android/system/build.prop \\");
             lines.Add("\t\t/android/build.prop \\");
             lines.Add("\t\t/android/system/etc/prop.default \\");
+            lines.Add("\t\t/android/prop.default \\");
+            lines.Add("\t\t/android/default.prop \\");
             lines.Add("\t\t/android/vendor/build.prop \\");
+            lines.Add("\t\t/android/vendor/etc/build.prop \\");
+            lines.Add("\t\t/android/vendor/default.prop \\");
+            lines.Add("\t\t/android/vendor/etc/prop.default \\");
+            lines.Add("\t\t/android/system/vendor/build.prop \\");
+            lines.Add("\t\t/android/system/vendor/etc/build.prop \\");
+            lines.Add("\t\t/android/system/vendor/default.prop \\");
+            lines.Add("\t\t/android/system/vendor/etc/device.prop \\");
+            lines.Add("\t\t/android/vendor/etc/device.prop \\");
+            lines.Add("\t\t/android/odm/build.prop \\");
             lines.Add("\t\t/android/odm/etc/build.prop \\");
+            lines.Add("\t\t/android/odm/default.prop \\");
+            lines.Add("\t\t/android/odm/etc/prop.default \\");
+            lines.Add("\t\t/android/vendor/odm/build.prop \\");
+            lines.Add("\t\t/android/vendor/odm/etc/build.prop \\");
+            lines.Add("\t\t/android/vendor/odm/default.prop \\");
+            lines.Add("\t\t/android/system/odm/build.prop \\");
+            lines.Add("\t\t/android/system/odm/etc/build.prop \\");
+            lines.Add("\t\t/android/system/vendor/odm/build.prop \\");
+            lines.Add("\t\t/android/system/vendor/odm/etc/build.prop \\");
+            lines.Add("\t\t/android/product/build.prop \\");
             lines.Add("\t\t/android/product/etc/build.prop \\");
+            lines.Add("\t\t/android/product/default.prop \\");
+            lines.Add("\t\t/android/product/etc/prop.default \\");
+            lines.Add("\t\t/android/system/product/build.prop \\");
+            lines.Add("\t\t/android/system/product/etc/build.prop \\");
+            lines.Add("\t\t/android/system/product/default.prop \\");
+            lines.Add("\t\t/android/system_ext/build.prop \\");
             lines.Add("\t\t/android/system_ext/etc/build.prop \\");
-            lines.Add("\t\t/android/default.prop /android/prop.default; do");
+            lines.Add("\t\t/android/system_ext/default.prop \\");
+            lines.Add("\t\t/android/system_ext/etc/prop.default \\");
+            lines.Add("\t\t/android/system/system_ext/build.prop \\");
+            lines.Add("\t\t/android/system/system_ext/etc/build.prop \\");
+            lines.Add("\t\t/android/system/system_ext/default.prop; do");
             lines.Add("\t\tif [ -f \"$target\" ]; then");
             lines.Add("\t\t\tmount -o remount,rw /android 2>/dev/null");
             lines.Add("\t\t\tmount -o remount,rw \"$(dirname \"$target\")\" 2>/dev/null");
-            lines.Add("\t\t\tcat /etc/build.prop.override >> \"$target\" 2>/dev/null");
+            lines.Add("\t\t\tif cat /etc/build.prop.override >> \"$target\" 2>/dev/null; then");
+            lines.Add("\t\t\t\techo \"build.prop overlay appended: $target\"");
+            lines.Add("\t\t\telse");
+            lines.Add("\t\t\t\techo \"build.prop overlay write skipped (not writable): $target\"");
+            lines.Add("\t\t\tfi");
             lines.Add("\t\tfi");
             lines.Add("\tdone");
             lines.Add("\techo \"build.prop overlay appended\"");
             lines.Add("fi");
+            lines.Add("");
+        }
+
+        // 内核版本串去指纹配套：补建 /lib/modules 版本别名条目。
+        // 原版引导脚本以 `ln -s ../system/lib/modules /lib/modules/$(uname -r)` 建立条目，
+        // 该软链只有在「条目名与镜像内既有模块目录同名」时才恰好可用：ln 因 File exists
+        // 失败，/lib/modules/$(uname -r) 便直接是存放 .ko 的真实目录。版本串一旦改名，
+        // 同一行会改建出一条指向父目录的悬空软链，modprobe 按 /lib/modules/$(uname -r) 查
+        // .ko 落空，表现为 virtio_net 等模块不加载、guest 无 eth0、ADB 通道随之断链。
+        // 因此别名必须指向既有模块目录本体，取其在 /lib/modules 下的真实目录项。
+        // 源目录在运行时探测而非写死：写死原版本串会把镜像来源身份带进产品源码。
+        string? modulesReleaseAlias = NormalizeModulesReleaseAlias(policy.ModulesReleaseAlias);
+        if (modulesReleaseAlias is not null)
+        {
+            lines.Add("# --- 内核版本串去指纹配套：模块目录版本别名 ----------------------");
+            lines.Add("# 原版引导脚本的 `ln -s ../system/lib/modules /lib/modules/$(uname -r)` 仅在条目名");
+            lines.Add("# 与既有模块目录同名时才恰好可用（ln 因 File exists 失败，/lib/modules/$(uname -r)");
+            lines.Add("# 即存放 .ko 的真实目录）。版本串改名后同一行会建出指向父目录的悬空软链，");
+            lines.Add("# modprobe 查 .ko 落空，virtio_net 不加载即无 eth0。故别名指向既有目录本体。");
+            lines.Add("# /lib/modules 经软链落在 system 分区内，镜像 system 为 ext4 ro，需先 remount,rw。");
+            lines.Add($"if [ -n \"{modulesReleaseAlias}\" ] && [ -d /lib/modules ]; then");
+            lines.Add($"\tmodules_alias_dir=\"/lib/modules/{modulesReleaseAlias}\"");
+            lines.Add("\tmodules_src=");
+            lines.Add("\tfor modules_cand in /lib/modules/*; do");
+            lines.Add("\t\tif [ -d \"$modules_cand\" ] && [ ! -L \"$modules_cand\" ]; then");
+            lines.Add("\t\t\tmodules_src=\"$modules_cand\"");
+            lines.Add("\t\t\tbreak");
+            lines.Add("\t\tfi");
+            lines.Add("\tdone");
+            lines.Add("\tif [ -z \"$modules_src\" ]; then");
+            lines.Add("\t\techo \"modules release alias source not found under /lib/modules\"");
+            lines.Add("\telif [ -d \"$modules_alias_dir\" ] && [ ! -L \"$modules_alias_dir\" ]; then");
+            lines.Add("\t\techo \"modules release alias target already a real directory: $modules_alias_dir\"");
+            lines.Add("\telse");
+            lines.Add("\t\tmount -o remount,rw /android 2>/dev/null");
+            lines.Add("\t\tif ln -sfn \"$modules_src\" \"$modules_alias_dir\" 2>/dev/null; then");
+            lines.Add("\t\t\techo \"modules release alias linked: $modules_alias_dir -> $modules_src\"");
+            lines.Add("\t\telse");
+            lines.Add("\t\t\techo \"modules release alias link skipped (not writable): $modules_alias_dir\"");
+            lines.Add("\t\tfi");
+            lines.Add("\tfi");
+            lines.Add("fi");
+            lines.Add("");
+        }
+
+        // 硬件代号去指纹配套：当下发了 androidboot.hardware 时，
+        // Android init 会按 init.${ro.boot.hardware}.rc 查找硬件初始化脚本。
+        // 原镜像仅含 init.android_x86_64.rc 等既有平台脚本，若未补建软链会导致硬件服务不加载。
+        // 遍历 /android/vendor/etc/init/hw 与 /android 为目标硬件代号建立指向原有 rc 的软链。
+        string? hardwareAlias = NormalizeModulesReleaseAlias(policy.HardwareAlias);
+        if (hardwareAlias is not null)
+        {
+            lines.Add("# --- 硬件代号去指纹配套：硬件 init rc 别名 ----------------------");
+            lines.Add("# 当下发了 androidboot.hardware 时，Android init 会按 init.${hardware}.rc");
+            lines.Add("# 查找硬件初始化脚本；镜像根目录仅含 init.bliss_x86_64.rc 等既有平台脚本，");
+            lines.Add("# 需补建指向原有平台 rc 的软链，否则网络配置与硬件服务不会被触发执行。");
+            lines.Add("mount -o remount,rw /android 2>/dev/null");
+            lines.Add("for rcdir in /android /android/vendor/etc/init/hw /android/system/vendor/etc/init/hw; do");
+            lines.Add("\tif [ -d \"$rcdir\" ]; then");
+            lines.Add("\t\tfor hrc in \"$rcdir\"/init.*.rc; do");
+            lines.Add("\t\t\t[ -f \"$hrc\" ] || continue");
+            lines.Add("\t\t\tbname=`basename \"$hrc\"`");
+            lines.Add("\t\t\tcase \"$bname\" in");
+            lines.Add($"\t\t\t\tinit.rc|init.usb.rc|init.environ.rc|init.recovery.*|init.zygote*|init.hardware.rc|init.{hardwareAlias}.rc) continue ;;");
+            lines.Add("\t\t\t\t*)");
+            lines.Add($"\t\t\t\t\tif [ ! -e \"$rcdir/init.{hardwareAlias}.rc\" ]; then");
+            lines.Add($"\t\t\t\t\t\tln -sfn \"$bname\" \"$rcdir/init.{hardwareAlias}.rc\" 2>/dev/null");
+            lines.Add($"\t\t\t\t\t\techo \"hardware rc alias linked: $rcdir/init.{hardwareAlias}.rc -> $bname\"");
+            lines.Add("\t\t\t\t\tfi");
+            lines.Add("\t\t\t\t\tbreak");
+            lines.Add("\t\t\t\t\t;;");
+            lines.Add("\t\t\tesac");
+            lines.Add("\t\tdone");
+            lines.Add("\tfi");
+            lines.Add("done");
             lines.Add("");
         }
 

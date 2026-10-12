@@ -515,6 +515,27 @@ public sealed class AntiForensicsP1Tests : IDisposable
         Assert.Contains("androidboot.writable_system=1", cmdline);
     }
 
+    [Fact]
+    public void KernelCommandLineEmitsWeakBootProfileAndHardwareWhenProfileIsBound()
+    {
+        var identity = new DeviceIdentity
+        {
+            SerialNo = "XBSN0123456789AB",
+            AndroidId = "a3f9c2e17b8d4056",
+            DeviceProfileId = DeviceProfileCatalog.Vibe12ProfileId,
+        };
+
+        string cmdline = KernelCommandLine.Build(identity, VerificationState.Pass);
+
+        Assert.Contains("androidboot.flash.locked=0", cmdline);
+        Assert.Contains("androidboot.vbmeta.device_state=orange", cmdline);
+        Assert.Contains("androidboot.verifiedbootstate=orange", cmdline);
+        Assert.Contains("androidboot.veritymode=disabled", cmdline);
+        Assert.Contains("androidboot.bootloader=vibe12pro-boot-1.0", cmdline);
+        Assert.Contains("androidboot.bootmode=normal", cmdline);
+        Assert.DoesNotContain("androidboot.hardware=", cmdline);
+    }
+
     #endregion
 
     #region 6. 检测面指标台账完整性 (附录 C)

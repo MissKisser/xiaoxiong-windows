@@ -1,4 +1,5 @@
 using XBear.Core.Diagnostics;
+using XBear.Core.Identity;
 using XBear.Core.Qemu;
 using XBear.Core.Spec;
 
@@ -83,6 +84,14 @@ public sealed class KernelCommandLineTests
         Assert.Equal("androidboot.serialno", KernelCommandLine.SerialNoKey);
         Assert.Equal("androidboot.android_id", KernelCommandLine.AndroidIdKey);
         Assert.Equal("androidboot.imei", KernelCommandLine.ImeiKey);
+        Assert.Equal("androidboot.flash.locked", KernelCommandLine.FlashLockedKey);
+        Assert.Equal("androidboot.vbmeta.device_state", KernelCommandLine.VbmetaDeviceStateKey);
+        Assert.Equal("androidboot.verifiedbootstate", KernelCommandLine.VerifiedBootStateKey);
+        Assert.Equal("androidboot.veritymode", KernelCommandLine.VerityModeKey);
+        Assert.Equal("androidboot.bootloader", KernelCommandLine.BootloaderKey);
+        Assert.Equal("androidboot.baseband", KernelCommandLine.BasebandKey);
+        Assert.Equal("androidboot.bootmode", KernelCommandLine.BootmodeKey);
+        Assert.Equal("androidboot.hardware", KernelCommandLine.HardwareKey);
         Assert.Equal("androidboot.writable_system", KernelCommandLine.WritableSystemKey);
         Assert.Equal("1", KernelCommandLine.WritableSystemEnabledValue);
     }
@@ -184,5 +193,79 @@ public sealed class KernelCommandLineTests
                 "   ",
                 "androidboot.writable_system=1",
             }));
+    }
+
+    [Fact]
+    public void 机型族画像下发生效弱校验启动链与硬件代号()
+    {
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var identity = CreateIdentity();
+
+        var fragments = KernelCommandLine.BuildBootFragments(profile);
+
+        Assert.Contains("androidboot.flash.locked=0", fragments);
+        Assert.Contains("androidboot.vbmeta.device_state=orange", fragments);
+        Assert.Contains("androidboot.verifiedbootstate=orange", fragments);
+        Assert.Contains("androidboot.veritymode=disabled", fragments);
+        Assert.Contains($"androidboot.bootloader={profile.Device}-boot-1.0", fragments);
+        Assert.Contains("androidboot.bootmode=normal", fragments);
+        Assert.DoesNotContain(fragments, f => f.StartsWith("androidboot.hardware="));
+        Assert.DoesNotContain(fragments, f => f.StartsWith("androidboot.baseband="));
+
+        string cmdline = KernelCommandLine.Build(identity, VerificationState.Untested, profile);
+        Assert.Contains("androidboot.serialno=" + SerialNo, cmdline);
+        Assert.Contains("androidboot.flash.locked=0", cmdline);
+        Assert.DoesNotContain("androidboot.hardware=", cmdline);
+    }
+
+    [Fact]
+    public void 显式启动链参数覆盖默认弱画像取值()
+    {
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var bootIdentity = new BootIdentitySpec
+        {
+            FlashLocked = "0",
+            VbmetaDeviceState = "orange",
+            VerifiedBootState = "orange",
+            VerityMode = "relaxed",
+            Bootloader = "custom-bl-2.0",
+            Bootmode = "factory",
+            Baseband = "modem-xyz-1.0",
+        };
+
+        var fragments = KernelCommandLine.BuildBootFragments(profile, bootIdentity);
+
+        Assert.Contains("androidboot.flash.locked=0", fragments);
+        Assert.Contains("androidboot.vbmeta.device_state=orange", fragments);
+        Assert.Contains("androidboot.verifiedbootstate=orange", fragments);
+        Assert.Contains("androidboot.veritymode=relaxed", fragments);
+        Assert.Contains("androidboot.bootloader=custom-bl-2.0", fragments);
+        Assert.Contains("androidboot.bootmode=factory", fragments);
+        Assert.Contains("androidboot.baseband=modem-xyz-1.0", fragments);
+        Assert.DoesNotContain(fragments, f => f.StartsWith("androidboot.hardware="));
+    }
+
+    [Fact]
+    public void 通过DeviceProfileId自动解析画像下发启动链参数()
+    {
+        var identity = new DeviceIdentity
+        {
+            SerialNo = SerialNo,
+            AndroidId = AndroidId,
+            DeviceProfileId = DeviceProfileCatalog.Vibe12ProfileId,
+        };
+
+        string cmdline = KernelCommandLine.Build(identity, VerificationState.Pass);
+
+        Assert.Contains("androidboot.serialno=" + SerialNo, cmdline);
+        Assert.Contains("androidboot.android_id=" + AndroidId, cmdline);
+        Assert.Contains("androidboot.flash.locked=0", cmdline);
+        Assert.Contains("androidboot.vbmeta.device_state=orange", cmdline);
+        Assert.Contains("androidboot.verifiedbootstate=orange", cmdline);
+        Assert.Contains("androidboot.veritymode=disabled", cmdline);
+        Assert.Contains("androidboot.bootloader=vibe12pro-boot-1.0", cmdline);
+        Assert.Contains("androidboot.bootmode=normal", cmdline);
+        Assert.DoesNotContain("androidboot.hardware=", cmdline);
+        Assert.Contains("androidboot.writable_system=1", cmdline);
     }
 }

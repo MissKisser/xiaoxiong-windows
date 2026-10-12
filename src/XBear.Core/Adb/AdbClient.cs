@@ -474,6 +474,10 @@ public sealed class AdbClient : IAdbFileTransferClient
                 return fallbackSerial;
             }
 
+            // 若传输通道未就绪（如初次连接未通或 adb server 中残留了前序失败的 offline 状态），
+            // 先主动断开以清除服务端缓存的离线套接字，再重新发起 connect 握手。
+            await SendDisconnectCommandAsync(primarySerial, cancellationToken).ConfigureAwait(false);
+
             if (await SendConnectCommandAsync(primarySerial, cancellationToken).ConfigureAwait(false))
             {
                 if (await TryCheckTransportAsync(primarySerial, cancellationToken).ConfigureAwait(false))
@@ -536,6 +540,33 @@ public sealed class AdbClient : IAdbFileTransferClient
             byte[] payload = await ReadLengthPrefixedAsync(stream, cancellationToken).ConfigureAwait(false);
             string response = Encoding.UTF8.GetString(payload);
             return !response.StartsWith("cannot connect", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private async Task<bool> SendDisconnectCommandAsync(string serial, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var client = new TcpClient { NoDelay = true };
+            using var registration = cancellationToken.CanBeCanceled ? cancellationToken.Register(client.Dispose) : default;
+            await client.ConnectAsync(IPAddress.Loopback, _serverPort, cancellationToken).ConfigureAwait(false);
+
+            NetworkStream stream = client.GetStream();
+            await WriteRequestAsync(stream, $"host:disconnect:{serial}", cancellationToken).ConfigureAwait(false);
+
+            byte[] status = await ReadExactAsync(stream, 4, cancellationToken).ConfigureAwait(false);
+            if (Encoding.ASCII.GetString(status) != "OKAY")
+            {
+                return false;
+            }
+
+            byte[] payload = await ReadLengthPrefixedAsync(stream, cancellationToken).ConfigureAwait(false);
+            string response = Encoding.UTF8.GetString(payload);
+            return !response.StartsWith("cannot disconnect", StringComparison.OrdinalIgnoreCase);
         }
         catch
         {

@@ -66,6 +66,9 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
     /// <summary>收到 STAT 请求后是否故意返回 FAIL，用于验证取不到源文件大小时的降级逻辑。</summary>
     public bool DisableStat { get; set; }
 
+    /// <summary>前 N 次 host:transport 请求故意返回 FAIL device offline，用于验证重连与断开逻辑。</summary>
+    public int FailTransportAttempts { get; set; }
+
     /// <summary>客户端发出的请求负载原文。</summary>
     public IReadOnlyList<string> Requests
     {
@@ -331,11 +334,27 @@ internal sealed class FakeAdbdServer : IAsyncDisposable
             return false;
         }
 
+        if (payload.StartsWith("host:disconnect:", StringComparison.Ordinal))
+        {
+            string targetAddr = payload["host:disconnect:".Length..];
+            await WriteStatusAsync(stream, "OKAY").ConfigureAwait(false);
+            await WriteLengthPrefixedAsync(stream, Encoding.UTF8.GetBytes($"disconnected {targetAddr}")).ConfigureAwait(false);
+            return false;
+        }
+
         if (payload.StartsWith("host:transport", StringComparison.Ordinal))
         {
             if (StallHandshake)
             {
                 await Task.Delay(Timeout.Infinite, _cts.Token).ConfigureAwait(false);
+                return false;
+            }
+
+            if (FailTransportAttempts > 0)
+            {
+                FailTransportAttempts--;
+                await WriteStatusAsync(stream, "FAIL").ConfigureAwait(false);
+                await WriteLengthPrefixedAsync(stream, Encoding.UTF8.GetBytes("device offline")).ConfigureAwait(false);
                 return false;
             }
 

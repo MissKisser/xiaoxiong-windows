@@ -34,6 +34,19 @@ public sealed class AdbClientTests : IDisposable
     }
 
     [Fact]
+    public async Task ConnectAsync_传输就绪前先尝试断开旧会话以清除服务端离线缓存()
+    {
+        await using var server = new FakeAdbdServer { FailTransportAttempts = 2 };
+        await using var client = new AdbClient(server.Port);
+
+        int version = await client.ConnectAsync(5555);
+
+        Assert.Equal(0x29, version);
+        Assert.Contains(server.Requests, r => r.StartsWith("host:disconnect:127.0.0.1:5555", StringComparison.Ordinal));
+        Assert.Contains(server.Requests, r => r.StartsWith("host:connect:127.0.0.1:5555", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task ConnectAsync_连接被拒时抛协议错误()
     {
         var probe = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);

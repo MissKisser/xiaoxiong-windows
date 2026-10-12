@@ -1,5 +1,6 @@
 using System.Text;
 using XBear.Core.Diagnostics;
+using XBear.Core.Identity;
 using XBear.Core.Spec;
 
 namespace XBear.Core.Qemu;
@@ -39,6 +40,30 @@ public static class KernelCommandLine
     /// 系统内的实际取值由基带侧持有，此处按下发约定输出作为扩展点。
     /// </summary>
     public const string ImeiKey = AndroidBootPropertyPrefix + "imei";
+
+    /// <summary>启动链加锁状态对应的引导键。</summary>
+    public const string FlashLockedKey = AndroidBootPropertyPrefix + "flash.locked";
+
+    /// <summary>vbmeta 设备状态对应的引导键。</summary>
+    public const string VbmetaDeviceStateKey = AndroidBootPropertyPrefix + "vbmeta.device_state";
+
+    /// <summary>已校验启动状态对应的引导键。</summary>
+    public const string VerifiedBootStateKey = AndroidBootPropertyPrefix + "verifiedbootstate";
+
+    /// <summary>dm-verity 模式对应的引导键。</summary>
+    public const string VerityModeKey = AndroidBootPropertyPrefix + "veritymode";
+
+    /// <summary>引导加载程序标识对应的引导键。</summary>
+    public const string BootloaderKey = AndroidBootPropertyPrefix + "bootloader";
+
+    /// <summary>基带版本标识对应的引导键。</summary>
+    public const string BasebandKey = AndroidBootPropertyPrefix + "baseband";
+
+    /// <summary>引导模式对应的引导键。</summary>
+    public const string BootmodeKey = AndroidBootPropertyPrefix + "bootmode";
+
+    /// <summary>硬件代号对应的引导键。</summary>
+    public const string HardwareKey = AndroidBootPropertyPrefix + "hardware";
 
     /// <summary>
     /// 系统分区可写对应的引导键。仅在镜像保真度实测通过时下发，
@@ -102,15 +127,78 @@ public static class KernelCommandLine
             : null;
 
     /// <summary>
+    /// 把启动链与机型族弱校验画像映射为内核引导命令行片段。
+    /// 未指定画像且未指定启动链规格时不产出任何片段。
+    /// </summary>
+    /// <param name="profile">机型族画像，可为空。</param>
+    /// <param name="bootIdentity">启动链规格，可为空。</param>
+    /// <returns>按固定顺序排列的引导命令行片段集合。</returns>
+    /// <exception cref="XBearException">取值含白名单外字符时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
+    public static IReadOnlyList<string> BuildBootFragments(
+        DeviceProfile? profile,
+        BootIdentitySpec? bootIdentity = null)
+    {
+        if (profile is null && bootIdentity is null)
+        {
+            return Array.Empty<string>();
+        }
+
+        var fragments = new List<string>(8);
+
+        string flashLocked = bootIdentity?.FlashLocked ?? PropertyOverlayBuilder.DefaultFlashLocked;
+        fragments.Add(ComposeFragment(FlashLockedKey, flashLocked));
+
+        string vbmetaState = bootIdentity?.VbmetaDeviceState ?? PropertyOverlayBuilder.DefaultVbmetaDeviceState;
+        fragments.Add(ComposeFragment(VbmetaDeviceStateKey, vbmetaState));
+
+        string verifiedBootState = bootIdentity?.VerifiedBootState ?? PropertyOverlayBuilder.DefaultVerifiedBootState;
+        fragments.Add(ComposeFragment(VerifiedBootStateKey, verifiedBootState));
+
+        string verityMode = bootIdentity?.VerityMode ?? PropertyOverlayBuilder.DefaultVerityMode;
+        fragments.Add(ComposeFragment(VerityModeKey, verityMode));
+
+        string bootloader = bootIdentity?.Bootloader
+            ?? (profile is not null ? $"{profile.Device}-boot-1.0" : PropertyOverlayBuilder.DefaultBootloader);
+        fragments.Add(ComposeFragment(BootloaderKey, bootloader));
+
+        if (!string.IsNullOrWhiteSpace(bootIdentity?.Baseband))
+        {
+            fragments.Add(ComposeFragment(BasebandKey, bootIdentity.Baseband.Trim()));
+        }
+
+        string bootmode = bootIdentity?.Bootmode ?? "normal";
+        fragments.Add(ComposeFragment(BootmodeKey, bootmode));
+
+        // 注意：androidboot.hardware 不在内核引导参数中下发。
+        // 该键属于内核级硬件平台标识，下发非镜像原生代号（如 vibe12pro）会破坏 guest 内
+        // init.${ro.boot.hardware}.rc 与 HAL 动态库（gralloc 等）的加载路径，
+        // 导致网络接口与驱动无法初始化。硬件属性压制应在用户空间通过 build.prop 覆盖层实现。
+
+        return fragments;
+    }
+
+    /// <summary>
     /// 合成完整的内核引导命令行。仅内核引导模式（已配置 -kernel）可使用。
     /// </summary>
     /// <param name="identity">实例设备标识，可为空。</param>
     /// <param name="systemWrite">镜像保真度中 P2 系统可写的实测结论。</param>
+    /// <param name="profile">机型族画像，可为空；未传入时尝试按 identity.DeviceProfileId 自动解析。</param>
+    /// <param name="bootIdentity">启动链规格，可为空。</param>
     /// <returns>以空白分隔的引导命令行，无任何片段时返回空串。</returns>
     /// <exception cref="XBearException">标识取值含白名单外字符时抛出 <see cref="ErrorCategory.Spec"/>。</exception>
-    public static string Build(DeviceIdentity? identity, VerificationState systemWrite)
+    public static string Build(
+        DeviceIdentity? identity,
+        VerificationState systemWrite,
+        DeviceProfile? profile = null,
+        BootIdentitySpec? bootIdentity = null)
     {
+        var resolvedProfile = profile ?? (identity?.DeviceProfileId is not null
+            ? DeviceProfileCatalog.Find(identity.DeviceProfileId)
+            : null);
+
         var fragments = new List<string>(BuildIdentityFragments(identity));
+        fragments.AddRange(BuildBootFragments(resolvedProfile, bootIdentity));
+
         var writable = BuildWritableSystemFragment(systemWrite);
         if (writable is not null)
         {

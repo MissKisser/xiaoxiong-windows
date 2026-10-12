@@ -103,12 +103,19 @@ public sealed class InitrdCustomizerAntiforensicsTests : IDisposable
         Assert.DoesNotContain("cp -f /etc/build.prop.override \"$target\"", initText);
 
         // 覆写必须覆盖全部分区 prop 文件：属性服务按 system→vendor→odm→product→system_ext
-        // 依次载入，只追加 system 会被其余分区回写，四分区一致性指标将不成立。
+        // 依次载入，只追加 system 会被其余分区回写，五分区一致性指标将不成立。
         Assert.Contains("/android/vendor/build.prop", initText);
+        Assert.Contains("/android/vendor/default.prop", initText);
+        Assert.Contains("/android/odm/build.prop", initText);
         Assert.Contains("/android/odm/etc/build.prop", initText);
+        Assert.Contains("/android/product/build.prop", initText);
         Assert.Contains("/android/product/etc/build.prop", initText);
+        Assert.Contains("/android/system_ext/build.prop", initText);
         Assert.Contains("/android/system_ext/etc/build.prop", initText);
         Assert.Contains("/android/system/etc/prop.default", initText);
+        Assert.Contains("> /tmp/device.prop", initText);
+        Assert.Contains("build.prop overlay appended: $target", initText);
+        Assert.Contains("build.prop overlay write skipped (not writable): $target", initText);
     }
 
     [Fact]
@@ -133,6 +140,47 @@ public sealed class InitrdCustomizerAntiforensicsTests : IDisposable
         string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
         Assert.DoesNotContain("cat /etc/build.prop.override >> \"$target\"", initText);
         Assert.DoesNotContain("mount --bind /etc/build.prop.override", initText);
+    }
+
+    [Fact]
+    public async Task BuildProp覆写_多分区追加目标包含五分区与降级保护留痕()
+    {
+        string workspace = _temp.New("bp_multiparts");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        // 验证覆盖五分区（system, vendor, odm, product, system_ext）的主要候选路径
+        Assert.Contains("/android/system/build.prop", initText);
+        Assert.Contains("/android/vendor/build.prop", initText);
+        Assert.Contains("/android/odm/build.prop", initText);
+        Assert.Contains("/android/product/build.prop", initText);
+        Assert.Contains("/android/system_ext/build.prop", initText);
+
+        // 验证包含 prop.default 与 default.prop 变体
+        Assert.Contains("/android/system/etc/prop.default", initText);
+        Assert.Contains("/android/prop.default", initText);
+        Assert.Contains("/android/default.prop", initText);
+        Assert.Contains("/android/vendor/default.prop", initText);
+
+        // 验证 device.prop 与 /tmp 清理
+        Assert.Contains("/android/system/vendor/etc/device.prop", initText);
+        Assert.Contains("[ -f /tmp/device.prop ] && > /tmp/device.prop", initText);
+
+        // 验证降级保护与留痕分支存在
+        Assert.Contains("build.prop overlay appended: $target", initText);
+        Assert.Contains("build.prop overlay write skipped (not writable): $target", initText);
     }
 
     [Fact]
@@ -532,6 +580,220 @@ public sealed class InitrdCustomizerAntiforensicsTests : IDisposable
 
         string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
         Assert.Contains("init.environ.rc", initText);
+    }
+
+    [Fact]
+    public async Task 模块目录版本别名_注入软链指向既有模块目录()
+    {
+        string workspace = _temp.New("modules_alias");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd",
+            ModulesReleaseAlias: "6.1.112-android11-perf");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        // 版本串必须以字面量形式出现在注入块内，并与定制参数逐字一致。
+        Assert.Contains("if [ -n \"6.1.112-android11-perf\" ] && [ -d /lib/modules ]; then", initText);
+        Assert.Contains("modules_alias_dir=\"/lib/modules/6.1.112-android11-perf\"", initText);
+
+        // 源目录必须在运行时从 /lib/modules 下的真实目录项探测：
+        // 写死原版本串会把镜像来源身份带进产品源码，且换镜像即失效。
+        Assert.Contains("for modules_cand in /lib/modules/*; do", initText);
+        Assert.Contains("[ -d \"$modules_cand\" ] && [ ! -L \"$modules_cand\" ]", initText);
+        Assert.Contains("modules_src=\"$modules_cand\"", initText);
+
+        // 关键回归点：软链目标必须是探测到的既有目录本体，不能沿用原版脚本的父目录相对路径。
+        // 原版 `ln -s ../system/lib/modules /lib/modules/$(uname -r)` 仅在条目名与既有目录同名时
+        // 恰好可用（ln 因 File exists 失败）；版本串改名后沿用该目标会建出悬空软链，
+        // modprobe 查 /lib/modules/$(uname -r)/virtio_net.ko 落空，guest 无 eth0、ADB 断链。
+        Assert.Contains("ln -sfn \"$modules_src\" \"$modules_alias_dir\"", initText);
+        Assert.DoesNotContain("ln -sfn ../system/lib/modules", initText);
+
+        // /lib/modules 经软链落在 system 分区内，镜像 system 为 ext4 ro，
+        // 不先 remount,rw 会直接 Read-only file system，别名条目根本落不了盘。
+        int remountLine = initText.IndexOf("mount -o remount,rw /android", StringComparison.Ordinal);
+        int linkLine = initText.IndexOf("ln -sfn \"$modules_src\"", StringComparison.Ordinal);
+        Assert.True(remountLine > 0 && linkLine > remountLine,
+            "remount,rw 必须先于软链建立，否则 system 分区只读会导致别名条目创建失败。");
+
+        // 降级保护：探测不到源目录、目标已是真实目录、写入失败三条分支均只告警不阻断引导。
+        Assert.Contains("modules release alias source not found under /lib/modules", initText);
+        Assert.Contains("modules release alias target already a real directory:", initText);
+        Assert.Contains("modules release alias link skipped (not writable):", initText);
+
+        // ln -sfn 天然幂等：重复定制会覆盖既有软链，不会叠加嵌套链接。
+        Assert.Contains("-sfn", initText);
+    }
+
+    [Fact]
+    public async Task 模块目录版本别名_未配置时不注入任何软链语句()
+    {
+        string workspace = _temp.New("modules_alias_off");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd");
+
+        Assert.False(policy.ModulesReleaseAliasEnabled);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+        Assert.DoesNotContain("modules_alias_dir", initText);
+        Assert.DoesNotContain("modules release alias", initText);
+    }
+
+    [Fact]
+    public async Task 模块目录版本别名_参与指纹且别名变化触发重新定制()
+    {
+        string workspace = _temp.New("modules_alias_fpr");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var baseline = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd");
+        var aliased = baseline with { ModulesReleaseAlias = "6.1.112-android11-perf" };
+        var otherAlias = baseline with { ModulesReleaseAlias = "6.1.112-android11-hyper" };
+
+        Assert.NotEqual(
+            InitrdCustomizerService.ComputeFingerprint(baseline),
+            InitrdCustomizerService.ComputeFingerprint(aliased));
+        Assert.NotEqual(
+            InitrdCustomizerService.ComputeFingerprint(aliased),
+            InitrdCustomizerService.ComputeFingerprint(otherAlias));
+
+        var firstService = new InitrdCustomizerService(keyPath, aliased);
+        var first = await firstService.CustomizeAsync(initrdPath);
+        Assert.Equal(InitrdCustomizationOutcome.Customized, first.Outcome);
+
+        // 同策略重复定制必须命中幂等旁路，不重复解压重打包。
+        var second = await firstService.CustomizeAsync(initrdPath);
+        Assert.Equal(InitrdCustomizationOutcome.AlreadyCustomized, second.Outcome);
+
+        var alteredService = new InitrdCustomizerService(keyPath, otherAlias);
+        var third = await alteredService.CustomizeAsync(initrdPath);
+        Assert.Equal(InitrdCustomizationOutcome.Customized, third.Outcome);
+        Assert.NotEqual(first.Fingerprint, third.Fingerprint);
+
+        string finalInit = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+        Assert.Contains("6.1.112-android11-hyper", finalInit);
+        Assert.DoesNotContain("6.1.112-android11-perf", finalInit);
+    }
+
+    [Theory]
+    [InlineData("6.1.112-android11-perf")]
+    [InlineData(" 6.1.112-android11-perf ")]
+    [InlineData("5.10.198-g1234567")]
+    [InlineData("6.1.0_rc1+custom")]
+    public void 模块目录版本别名_合法版本串被接受并去除首尾空白(string value)
+    {
+        Assert.Equal(value.Trim(), InitrdCustomizerService.NormalizeModulesReleaseAlias(value));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void 模块目录版本别名_空白输入归一化为未启用(string? value)
+    {
+        Assert.Null(InitrdCustomizerService.NormalizeModulesReleaseAlias(value));
+    }
+
+    [Theory]
+    [InlineData("6.1.112/../etc")]
+    [InlineData("$(reboot)")]
+    [InlineData("`id`")]
+    [InlineData("a\"b")]
+    [InlineData("a'b")]
+    [InlineData("a b")]
+    [InlineData("a;b")]
+    [InlineData("a$b")]
+    [InlineData("../../android/system/lib/modules")]
+    public void 模块目录版本别名_可改变脚本语义的字符被拒绝(string value)
+    {
+        // 该值会被拼进引导脚本的字面量，必须在宿主侧提前失败，
+        // 否则会产出脚本语义被改写或无法引导的实例。
+        Assert.Throws<XBearException>(() => InitrdCustomizerService.NormalizeModulesReleaseAlias(value));
+    }
+
+    [Fact]
+    public async Task 模块目录版本别名_非法版本串在定制阶段即失败且不产出半成品()
+    {
+        string workspace = _temp.New("modules_alias_invalid");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+        byte[] original = File.ReadAllBytes(initrdPath);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd",
+            ModulesReleaseAlias: "6.1.112-android11-perf; reboot");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+
+        await Assert.ThrowsAsync<XBearException>(() => service.CustomizeAsync(initrdPath));
+
+        // 校验发生在指纹计算阶段，早于原版留档与归档改写：
+        // 失败时 initrd 本身必须保持原样，且不得留下原版留档与临时文件。
+        Assert.Equal(original, File.ReadAllBytes(initrdPath));
+        Assert.False(File.Exists(initrdPath + InitrdCustomizerService.StockSuffix));
+        Assert.False(File.Exists(initrdPath + ".customizing"));
+    }
+
+    [Fact]
+    public void 模块目录版本别名_工厂方法可透传且默认不启用()
+    {
+        DeviceProfile profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+
+        var withoutAlias = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            5555, HostPublicKey, "/apex/com.android.adbd", profile);
+        Assert.False(withoutAlias.ModulesReleaseAliasEnabled);
+        Assert.Null(withoutAlias.ModulesReleaseAlias);
+
+        var withAlias = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            5555, HostPublicKey, "/apex/com.android.adbd", profile,
+            modulesReleaseAlias: "6.1.112-android11-perf");
+        Assert.True(withAlias.ModulesReleaseAliasEnabled);
+        Assert.Equal("6.1.112-android11-perf", withAlias.ModulesReleaseAlias);
+        Assert.True(withAlias.HasAntiforensicsCustomizations);
+    }
+
+    [Fact]
+    public async Task 硬件代号别名_注入软链指向既有平台rc脚本()
+    {
+        string workspace = _temp.New("hw_alias");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd",
+            HardwareAlias: "vibe12pro");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        Assert.Contains("init.vibe12pro.rc", initText);
+        Assert.Contains("ln -sfn \"$bname\" \"$rcdir/init.vibe12pro.rc\"", initText);
+        Assert.Contains("hardware rc alias linked:", initText);
     }
 
     private string WriteHostKey(string workspace)

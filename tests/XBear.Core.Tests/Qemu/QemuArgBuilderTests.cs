@@ -1,6 +1,7 @@
 using System.Text.Json;
 using XBear.Core.Abstractions;
 using XBear.Core.Diagnostics;
+using XBear.Core.Identity;
 using XBear.Core.Qemu;
 using XBear.Core.Spec;
 
@@ -1109,6 +1110,31 @@ public sealed class QemuArgBuilderTests
             + " androidboot.imei=861234567890123"
             + " androidboot.writable_system=1",
             ReadKernelCommandLine(arguments));
+    }
+
+    [Fact]
+    public void 实例绑定机型族画像时内核引导命令行包含弱启动链与硬件参数()
+    {
+        var spec = CreateKernelBootSpec(kernelAppend: "root=/dev/ram0 nomodeset console=tty0");
+        SetIdentity(spec);
+        spec.DeviceIdentity!.DeviceProfileId = DeviceProfileCatalog.Vibe12ProfileId;
+
+        var arguments = CreateBuilder()
+            .BuildStartArguments(spec, CreateImage(VerificationState.Pass), DiskPath, new AllocatedPorts(5555, 5556, 5900));
+
+        string? cmdline = ReadKernelCommandLine(arguments);
+        Assert.NotNull(cmdline);
+        Assert.Contains("androidboot.serialno=XBSN0123456789AB", cmdline);
+        Assert.Contains("androidboot.android_id=a3f9c2e17b8d4056", cmdline);
+        Assert.Contains("androidboot.imei=861234567890123", cmdline);
+        Assert.Contains("androidboot.flash.locked=0", cmdline);
+        Assert.Contains("androidboot.vbmeta.device_state=orange", cmdline);
+        Assert.Contains("androidboot.verifiedbootstate=orange", cmdline);
+        Assert.Contains("androidboot.veritymode=disabled", cmdline);
+        Assert.Contains("androidboot.bootloader=vibe12pro-boot-1.0", cmdline);
+        Assert.Contains("androidboot.bootmode=normal", cmdline);
+        Assert.DoesNotContain("androidboot.hardware=", cmdline);
+        Assert.Contains("androidboot.writable_system=1", cmdline);
     }
 
     [Fact]

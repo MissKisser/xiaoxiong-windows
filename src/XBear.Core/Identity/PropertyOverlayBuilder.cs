@@ -53,7 +53,7 @@ public static class PropertyOverlayBuilder
     /// <summary>Pastel 软件 Vulkan 驱动的属性名。</summary>
     public const string PastelVulkanHardware = "pastel";
 
-    private static readonly string[] Partitions = { "system", "vendor", "product", "odm" };
+    private static readonly string[] Partitions = { "system", "vendor", "odm", "product", "system_ext" };
 
     /// <summary>
     /// 从完整身份契约对象生成属性字典。
@@ -153,11 +153,18 @@ public static class PropertyOverlayBuilder
             props[$"ro.{partition}.build.fingerprint"] = resolvedFingerprint;
         }
 
+        props["ro.bootimage.build.fingerprint"] = resolvedFingerprint;
+        props["ro.bootimage.build.id"] = buildId;
+        props["ro.bootimage.build.tags"] = tags;
+        props["ro.bootimage.build.type"] = type;
+        props["ro.bootimage.build.version.incremental"] = incremental;
+
         props["ro.build.type"] = type;
         props["ro.build.tags"] = tags;
         props["ro.build.flavor"] = flavor;
         props["ro.build.id"] = buildId;
         props["ro.build.version.incremental"] = incremental;
+        props["ro.build.description"] = $"{flavor} {DefaultReleaseVersion} {buildId} {incremental} {tags}";
 
         // 3. 启动链画像（A-22 方向 A：自洽弱画像）
         props["ro.boot.flash.locked"] = bootIdentity?.FlashLocked ?? DefaultFlashLocked;
@@ -181,9 +188,10 @@ public static class PropertyOverlayBuilder
             props["ro.boot.serialno"] = s;
         }
 
-        // 5. 平台与主板自洽（消解 L-05）
+        // 5. 平台与主板自洽
         props["ro.board.platform"] = profile.Device;
         props["ro.product.board"] = profile.Device;
+        props["ro.hardware"] = profile.Device;
 
         // 6. 渲染栈属性串（A-15 按 Q-06 默认处理）
         if (!enableRenderSpoofing)

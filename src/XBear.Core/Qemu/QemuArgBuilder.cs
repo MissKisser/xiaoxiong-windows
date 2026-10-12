@@ -492,9 +492,11 @@ public sealed class QemuArgBuilder : IQemuArgBuilder
         }
 
         string skeleton = ResolveKernelAppendSkeleton(spec);
+        DeviceProfile? profile = TryResolveProfile(spec);
         var dynamicCommandLine = KernelCommandLine.Build(
             spec.DeviceIdentity,
-            image?.Verified?.Fidelity.P2SystemWrite ?? VerificationState.Untested);
+            image?.Verified?.Fidelity.P2SystemWrite ?? VerificationState.Untested,
+            profile);
 
         var append = KernelCommandLine.Compose(new[] { skeleton, dynamicCommandLine });
         if (append.Length > 0)

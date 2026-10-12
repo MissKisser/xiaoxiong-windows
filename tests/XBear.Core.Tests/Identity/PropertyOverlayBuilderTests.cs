@@ -26,8 +26,8 @@ public sealed class PropertyOverlayBuilderTests
         Assert.Equal(profile.ProductName, props["ro.product.name"]);
         Assert.Equal(profile.Device, props["ro.product.device"]);
 
-        // 四大分区（system, vendor, product, odm）必须完全一致自洽（INV-6 / 消解 M-15）
-        foreach (string partition in new[] { "system", "vendor", "product", "odm" })
+        // 五大分区（system, vendor, odm, product, system_ext）必须完全一致自洽
+        foreach (string partition in new[] { "system", "vendor", "odm", "product", "system_ext" })
         {
             Assert.Equal(profile.Brand, props[$"ro.product.{partition}.brand"]);
             Assert.Equal(profile.Manufacturer, props[$"ro.product.{partition}.manufacturer"]);
@@ -62,8 +62,15 @@ public sealed class PropertyOverlayBuilderTests
         Assert.Equal(expectedFingerprint, props["ro.build.fingerprint"]);
         Assert.Equal(expectedFingerprint, props["ro.system.build.fingerprint"]);
         Assert.Equal(expectedFingerprint, props["ro.vendor.build.fingerprint"]);
-        Assert.Equal(expectedFingerprint, props["ro.product.build.fingerprint"]);
         Assert.Equal(expectedFingerprint, props["ro.odm.build.fingerprint"]);
+        Assert.Equal(expectedFingerprint, props["ro.product.build.fingerprint"]);
+        Assert.Equal(expectedFingerprint, props["ro.system_ext.build.fingerprint"]);
+        Assert.Equal(expectedFingerprint, props["ro.bootimage.build.fingerprint"]);
+        Assert.Equal("RSV1.210329.052", props["ro.bootimage.build.id"]);
+        Assert.Equal("release-keys", props["ro.bootimage.build.tags"]);
+        Assert.Equal("userdebug", props["ro.bootimage.build.type"]);
+        Assert.Equal("20241012", props["ro.bootimage.build.version.incremental"]);
+        Assert.Equal("phone_alpha-userdebug 11 RSV1.210329.052 20241012 release-keys", props["ro.build.description"]);
     }
 
     [Fact]
@@ -77,8 +84,10 @@ public sealed class PropertyOverlayBuilderTests
         Assert.Equal(customFp, props["ro.build.fingerprint"]);
         Assert.Equal(customFp, props["ro.system.build.fingerprint"]);
         Assert.Equal(customFp, props["ro.vendor.build.fingerprint"]);
-        Assert.Equal(customFp, props["ro.product.build.fingerprint"]);
         Assert.Equal(customFp, props["ro.odm.build.fingerprint"]);
+        Assert.Equal(customFp, props["ro.product.build.fingerprint"]);
+        Assert.Equal(customFp, props["ro.system_ext.build.fingerprint"]);
+        Assert.Equal(customFp, props["ro.bootimage.build.fingerprint"]);
     }
 
     [Fact]
@@ -140,6 +149,7 @@ public sealed class PropertyOverlayBuilderTests
 
         Assert.Equal(profile.Device, props["ro.board.platform"]);
         Assert.Equal(profile.Device, props["ro.product.board"]);
+        Assert.Equal(profile.Device, props["ro.hardware"]);
     }
 
     [Fact]
@@ -177,5 +187,22 @@ public sealed class PropertyOverlayBuilderTests
         Assert.Contains($"ro.product.model={profile.ProductName}", content);
         Assert.Contains("ro.serialno=XBSN0123456789AB", content);
         Assert.Contains("ro.boot.flash.locked=0", content);
+    }
+
+    [Fact]
+    public void 五分区与bootimage在生成文本中完整呈现()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        string content = PropertyOverlayBuilder.BuildBuildPropContent(profile);
+
+        foreach (string partition in new[] { "system", "vendor", "odm", "product", "system_ext" })
+        {
+            Assert.Contains($"ro.product.{partition}.brand={profile.Brand}", content);
+            Assert.Contains($"ro.{partition}.build.fingerprint=", content);
+        }
+
+        Assert.Contains("ro.bootimage.build.fingerprint=", content);
+        Assert.Contains($"ro.hardware={profile.Device}", content);
+        Assert.Contains("ro.build.description=", content);
     }
 }
