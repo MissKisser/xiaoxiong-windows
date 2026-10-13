@@ -196,7 +196,7 @@ public sealed class KernelCommandLineTests
     }
 
     [Fact]
-    public void 机型族画像下发生效弱校验启动链与硬件代号()
+    public void 机型族画像下发生效弱校验启动链且硬件代号不下发()
     {
         var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
         var identity = CreateIdentity();
@@ -267,5 +267,74 @@ public sealed class KernelCommandLineTests
         Assert.Contains("androidboot.bootmode=normal", cmdline);
         Assert.DoesNotContain("androidboot.hardware=", cmdline);
         Assert.Contains("androidboot.writable_system=1", cmdline);
+    }
+
+    [Fact]
+    public void 未绑定画像时不产出启动链片段()
+    {
+        var identity = CreateIdentity();
+
+        Assert.Empty(KernelCommandLine.BuildBootFragments(null));
+
+        // 既无画像也无启动链规格时，整条命令行只剩标识通道，不存在机型族派生取值。
+        string cmdline = KernelCommandLine.Build(identity, VerificationState.Untested);
+        Assert.DoesNotContain("androidboot.hardware=", cmdline);
+        Assert.DoesNotContain("androidboot.flash.locked=", cmdline);
+    }
+
+    [Fact]
+    public void 硬件代号只在属性覆写层下发且命令行通道刻意不下发()
+    {
+        DeviceProfile profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+
+        var fragments = KernelCommandLine.BuildBootFragments(profile);
+        var props = PropertyOverlayBuilder.BuildProperties(profile);
+
+        // 硬件代号压制只走属性覆写层：实机证实 androidboot.hardware 会把 guest 的 ro.hardware
+        // 钉死为机型代号，击穿镜像内以原生代号硬编码的 HAL/VINTF 解析，
+        // 导致 gralloc mapper 缺失、surfaceflinger 崩溃、整机不可用。命令行通道必须保持关闭。
+        Assert.DoesNotContain(fragments, f => f.StartsWith("androidboot.hardware="));
+        Assert.Equal(profile.Device, props["ro.hardware"]);
+        Assert.Equal(profile.Device, props["ro.product.device"]);
+    }
+
+    [Fact]
+    public void 启动链片段与属性覆写层的弱画像取值逐键一致()
+    {
+        DeviceProfile profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var bootIdentity = new BootIdentitySpec
+        {
+            FlashLocked = "0",
+            VbmetaDeviceState = "orange",
+            VerifiedBootState = "orange",
+            VerityMode = "disabled",
+            Bootloader = "vibe12pro-boot-1.0",
+            Bootmode = "normal",
+        };
+
+        var fragments = KernelCommandLine.BuildBootFragments(profile, bootIdentity);
+        var props = PropertyOverlayBuilder.BuildProperties(profile, bootIdentity: bootIdentity);
+
+        // 两条通道取值同源：命令行片段去掉前缀后即为对应 ro.boot.* 的取值。
+        Assert.Equal(bootIdentity.FlashLocked, Value(fragments, KernelCommandLine.FlashLockedKey));
+        Assert.Equal(bootIdentity.VbmetaDeviceState, Value(fragments, KernelCommandLine.VbmetaDeviceStateKey));
+        Assert.Equal(bootIdentity.VerifiedBootState, Value(fragments, KernelCommandLine.VerifiedBootStateKey));
+        Assert.Equal(bootIdentity.VerityMode, Value(fragments, KernelCommandLine.VerityModeKey));
+        Assert.Equal(bootIdentity.Bootloader, Value(fragments, KernelCommandLine.BootloaderKey));
+
+        Assert.Equal(props["ro.boot.flash.locked"], Value(fragments, KernelCommandLine.FlashLockedKey));
+        Assert.Equal(props["ro.boot.vbmeta.device_state"], Value(fragments, KernelCommandLine.VbmetaDeviceStateKey));
+        Assert.Equal(props["ro.boot.verifiedbootstate"], Value(fragments, KernelCommandLine.VerifiedBootStateKey));
+        Assert.Equal(props["ro.boot.veritymode"], Value(fragments, KernelCommandLine.VerityModeKey));
+        Assert.Equal(props["ro.bootloader"], Value(fragments, KernelCommandLine.BootloaderKey));
+    }
+
+    private static string Value(IEnumerable<string> fragments, string key)
+    {
+        string prefix = key + "=";
+        string? fragment = fragments.FirstOrDefault(f => f.StartsWith(prefix, StringComparison.Ordinal));
+
+        Assert.NotNull(fragment);
+        return fragment[prefix.Length..];
     }
 }

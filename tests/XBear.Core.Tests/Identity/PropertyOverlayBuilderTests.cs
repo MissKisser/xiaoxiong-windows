@@ -205,4 +205,54 @@ public sealed class PropertyOverlayBuilderTests
         Assert.Contains($"ro.hardware={profile.Device}", content);
         Assert.Contains("ro.build.description=", content);
     }
+
+    [Fact]
+    public void 分区级构建身份随类型标签同步覆写()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        var build = new BuildIdentitySpec
+        {
+            Type = "userdebug",
+            Tags = "release-keys",
+            Flavor = "phone_alpha-userdebug",
+            BuildId = "RSV1.210329.052",
+            Incremental = "20241012"
+        };
+
+        var props = PropertyOverlayBuilder.BuildProperties(profile, buildIdentity: build);
+
+        // 后载入的分区会带着镜像原生的 ro.build.type 覆盖先前的取值，
+        // 只覆写 ro.build.type 会让「指纹类型段 userdebug、类型属性 user」的矛盾重新出现。
+        foreach (string partition in new[] { "system", "vendor", "odm", "product", "system_ext" })
+        {
+            Assert.Equal("userdebug", props[$"ro.{partition}.build.type"]);
+            Assert.Equal("release-keys", props[$"ro.{partition}.build.tags"]);
+            Assert.Equal("phone_alpha-userdebug", props[$"ro.{partition}.build.flavor"]);
+            Assert.Equal("RSV1.210329.052", props[$"ro.{partition}.build.id"]);
+            Assert.Equal("20241012", props[$"ro.{partition}.build.version.incremental"]);
+            Assert.Equal(props["ro.build.description"], props[$"ro.{partition}.build.description"]);
+        }
+    }
+
+    [Fact]
+    public void 指纹类型段与类型属性恒等()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        var props = PropertyOverlayBuilder.BuildProperties(profile);
+
+        // 指纹格式：<brand>/<model>/<device>:<release>/<buildId>/<incremental>:<type>/<tags>
+        string[] segments = props["ro.build.fingerprint"].Split(':');
+        Assert.Equal(3, segments.Length);
+        Assert.Equal(props["ro.build.type"], segments[2].Split('/')[0]);
+        Assert.Equal(props["ro.build.tags"], segments[2].Split('/')[1]);
+    }
+
+    [Fact]
+    public void 覆写文本首行为可识别标记()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        string content = PropertyOverlayBuilder.BuildBuildPropContent(profile);
+
+        Assert.StartsWith(PropertyOverlayBuilder.OverlayMarkerHeader, content, StringComparison.Ordinal);
+    }
 }

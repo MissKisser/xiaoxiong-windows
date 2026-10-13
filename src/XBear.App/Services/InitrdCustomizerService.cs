@@ -29,7 +29,10 @@ namespace XBear.App.Services;
 /// <param name="CleanupKernelSuRemnants">是否清理非本产品的 KernelSU 遗留目录与二进制（A-14/Q-02）。</param>
 /// <param name="EmbeddedSrc">内嵌的安装态 SRC 标记（A-13，消除可见 cmdline 中的 SRC= 参数）。</param>
 /// <param name="ModulesReleaseAlias">内核版本串别名（去指纹内核版本串配套的模块目录条目名）。</param>
-/// <param name="HardwareAlias">硬件代号别名（去指纹硬件代号配套的 init rc 软链别名）。</param>
+/// <param name="HardwareAlias">硬件代号别名（去指纹硬件代号配套的 init rc 与 HAL 软链别名）。</param>
+/// <param name="HardwareSourceAlias">镜像原生硬件代号（HAL 软链的源名，默认见 <see cref="DefaultHardwareSourceAlias"/>）。</param>
+/// <param name="StripPrivatePropertyPrefix">需要行级删除的镜像私有属性前缀，为空表示不做删除。</param>
+/// <param name="HostName">guest 主机名，取值为机型族代号。</param>
 public sealed record InitrdCustomizationPolicy(
     int AdbGuestPort,
     string AdbPublicKey,
@@ -47,8 +50,24 @@ public sealed record InitrdCustomizationPolicy(
     bool CleanupKernelSuRemnants = false,
     string? EmbeddedSrc = null,
     string? ModulesReleaseAlias = null,
-    string? HardwareAlias = null)
+    string? HardwareAlias = null,
+    string? HardwareSourceAlias = null,
+    string? StripPrivatePropertyPrefix = null,
+    string? HostName = null)
 {
+    /// <summary>
+    /// 镜像原生硬件代号的缺省取值。
+    /// 该值只用于在 HAL 库目录中按「原生代号命名」检索既有动态库并补建代号别名软链，
+    /// 不参与任何对外可见的取值派生；换镜像只需替换该常量或由调用方显式传入。
+    /// </summary>
+    public const string DefaultHardwareSourceAlias = "bliss_x86_64";
+
+    /// <summary>
+    /// 需要行级删除的镜像私有属性前缀缺省值。
+    /// 追加式覆写只能新增或覆盖键，无法消除属性条目，镜像私有属性族必须从载入源删行。
+    /// </summary>
+    public const string DefaultStripPrivatePropertyPrefix = "ro.bliss.";
+
     /// <summary>
     /// 是否启用模块目录版本串别名定制项。
     /// 该项为空时完全等价于未启用，不影响既有产物的指纹与幂等判定。
@@ -60,6 +79,18 @@ public sealed record InitrdCustomizationPolicy(
     /// 该项为空时完全等价于未启用，不影响既有产物的指纹与幂等判定。
     /// </summary>
     public bool HardwareAliasEnabled => !string.IsNullOrWhiteSpace(HardwareAlias);
+
+    /// <summary>是否启用 HAL 库目录代号别名软链。需同时具备目标代号与镜像原生代号。</summary>
+    public bool HardwareHalAliasEnabled =>
+        HardwareAliasEnabled &&
+        !string.IsNullOrWhiteSpace(HardwareSourceAlias) &&
+        !string.Equals(HardwareAlias?.Trim(), HardwareSourceAlias?.Trim(), StringComparison.Ordinal);
+
+    /// <summary>是否启用镜像私有属性族的行级删除。</summary>
+    public bool StripPrivatePropertiesEnabled => !string.IsNullOrWhiteSpace(StripPrivatePropertyPrefix);
+
+    /// <summary>是否启用 guest 主机名收敛。</summary>
+    public bool HostNameEnabled => !string.IsNullOrWhiteSpace(HostName);
 
     /// <summary>
     /// 是否启用了任何抗取证扩展定制项。
@@ -77,7 +108,10 @@ public sealed record InitrdCustomizationPolicy(
         CleanupKernelSuRemnants ||
         !string.IsNullOrWhiteSpace(EmbeddedSrc) ||
         ModulesReleaseAliasEnabled ||
-        HardwareAliasEnabled;
+        HardwareAliasEnabled ||
+        HardwareHalAliasEnabled ||
+        StripPrivatePropertiesEnabled ||
+        HostNameEnabled;
 
     /// <summary>
     /// 便捷工厂方法：按画像与身份对象构建全套抗取证定制策略。
@@ -97,6 +131,10 @@ public sealed record InitrdCustomizationPolicy(
     /// <param name="enableRenderSpoofing">是否启用渲染伪装，默认 false（Q-06 默认保守）。</param>
     /// <param name="modulesReleaseAlias">内核版本串别名，为空表示不启用模块目录别名定制项。</param>
     /// <param name="hardwareAlias">硬件代号别名，为空表示使用画像的 Device 代号建立硬件 rc 软链。</param>
+    /// <param name="hardwareSourceAlias">镜像原生硬件代号，为空时取 <see cref="DefaultHardwareSourceAlias"/>。</param>
+    /// <param name="stripPrivatePropertyPrefix">待行级删除的镜像私有属性前缀，
+    /// 为空时取 <see cref="DefaultStripPrivatePropertyPrefix"/>。</param>
+    /// <param name="hostName">guest 主机名，为空时依次取身份契约中的主机名与画像的 Device 代号。</param>
     /// <returns>抗取证 initrd 定制策略。</returns>
     public static InitrdCustomizationPolicy CreateAntiforensicsPolicy(
         int adbGuestPort,
@@ -113,7 +151,10 @@ public sealed record InitrdCustomizationPolicy(
         bool renameInterfaceToWlan0 = true,
         bool enableRenderSpoofing = false,
         string? modulesReleaseAlias = null,
-        string? hardwareAlias = null)
+        string? hardwareAlias = null,
+        string? hardwareSourceAlias = null,
+        string? stripPrivatePropertyPrefix = null,
+        string? hostName = null)
     {
         ArgumentNullException.ThrowIfNull(profile);
 
@@ -122,6 +163,11 @@ public sealed record InitrdCustomizationPolicy(
             : PropertyOverlayBuilder.BuildBuildPropContent(profile, enableRenderSpoofing: enableRenderSpoofing);
 
         string? targetAndroidId = identity?.AndroidId;
+
+        string? resolvedHostName = FirstNonBlank(
+            hostName,
+            identity?.HostName,
+            profile.Device);
 
         return new InitrdCustomizationPolicy(
             AdbGuestPort: adbGuestPort,
@@ -140,7 +186,26 @@ public sealed record InitrdCustomizationPolicy(
             CleanupKernelSuRemnants: cleanupKernelSuRemnants,
             EmbeddedSrc: embeddedSrc,
             ModulesReleaseAlias: modulesReleaseAlias,
-            HardwareAlias: hardwareAlias ?? profile.Device);
+            HardwareAlias: hardwareAlias ?? profile.Device,
+            HardwareSourceAlias: hardwareSourceAlias ?? DefaultHardwareSourceAlias,
+            StripPrivatePropertyPrefix: stripPrivatePropertyPrefix ?? DefaultStripPrivatePropertyPrefix,
+            HostName: resolvedHostName);
+    }
+
+    /// <summary>返回首个非空白取值，全部空白时返回 null。</summary>
+    /// <param name="candidates">候选取值序列。</param>
+    /// <returns>首个去除首尾空白后的非空取值；全部为空时返回 null。</returns>
+    private static string? FirstNonBlank(params string?[] candidates)
+    {
+        foreach (string? candidate in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                return candidate.Trim();
+            }
+        }
+
+        return null;
     }
 }
 
@@ -349,6 +414,15 @@ public sealed class InitrdCustomizerService
             parts.Add(policy.HardwareAliasEnabled
                 ? $"hw_alias:{NormalizeModulesReleaseAlias(policy.HardwareAlias)}"
                 : "hw_alias:none");
+            parts.Add(policy.HardwareHalAliasEnabled
+                ? $"hw_src:{NormalizeModulesReleaseAlias(policy.HardwareSourceAlias)}"
+                : "hw_src:none");
+            parts.Add(policy.StripPrivatePropertiesEnabled
+                ? $"strip_prop:{NormalizePropertyPrefix(policy.StripPrivatePropertyPrefix)}"
+                : "strip_prop:none");
+            parts.Add(policy.HostNameEnabled
+                ? $"hostname:{NormalizeModulesReleaseAlias(policy.HostName)}"
+                : "hostname:none");
         }
 
         string material = string.Join("\n", parts);
@@ -357,14 +431,14 @@ public sealed class InitrdCustomizerService
     }
 
     /// <summary>
-    /// 归一化并校验内核版本串别名。
-    /// 该值会被拼进注入到 init 脚本的 shell 字面量，因此只接受内核版本串的合法字符集，
+    /// 归一化并校验需要拼进 init 脚本字面量的标识串（内核版本串别名、硬件代号别名与主机名共用）。
+    /// 该值会被拼进注入到 init 脚本的 shell 字面量，因此只接受标识符合法字符集，
     /// 任何可能改变脚本语义的字符（引号、变量展开、路径分隔、相对路径段）一律拒绝，
     /// 在宿主侧提前失败优于产出无法引导的实例。
     /// </summary>
-    /// <param name="value">待校验的版本串，可为空。</param>
-    /// <returns>去除首尾空白后的版本串；空白输入返回 null。</returns>
-    /// <exception cref="XBearException">版本串含非法字符时抛出。</exception>
+    /// <param name="value">待校验的标识串，可为空。</param>
+    /// <returns>去除首尾空白后的标识串；空白输入返回 null。</returns>
+    /// <exception cref="XBearException">标识串含非法字符时抛出。</exception>
     public static string? NormalizeModulesReleaseAlias(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -382,6 +456,35 @@ public sealed class InitrdCustomizerService
                 $"模块目录版本串别名含非法字符：{normalized}",
                 "版本串只能包含字母、数字与 . - _ + 四类符号，且不得包含 ..，" +
                 "例如 6.1.112-android11-perf。该值会拼入引导脚本的字面量，需与内核 uname -r 输出一致。");
+        }
+
+        return normalized;
+    }
+
+    /// <summary>
+    /// 归一化并校验待行级删除的属性键前缀。
+    /// 该前缀会进入注入脚本的 sed 表达式，只接受属性键的合法字符集，
+    /// 避免正则元字符改变删除范围或脚本语义。
+    /// </summary>
+    /// <param name="value">待校验的属性键前缀，可为空。</param>
+    /// <returns>去除首尾空白后的前缀；空白输入返回 null。</returns>
+    /// <exception cref="XBearException">前缀含非法字符时抛出。</exception>
+    public static string? NormalizePropertyPrefix(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        string normalized = value.Trim().TrimEnd('.');
+
+        if (normalized.Length == 0 ||
+            normalized.Any(c => !char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-')))
+        {
+            throw new XBearException(
+                ErrorCategory.Spec,
+                $"镜像私有属性前缀含非法字符：{normalized}",
+                "属性前缀只能包含字母、数字与 . _ - 三类符号，例如 ro.bliss.。");
         }
 
         return normalized;
@@ -733,6 +836,42 @@ public sealed class InitrdCustomizerService
             lines.Add("");
         }
 
+        // 覆写块首行标记：用于识别「本文件已由本产品追加过覆写块」，
+        // 从而在重复引导时裁掉旧块再追加新块，保证幂等且不留旧画像取值。
+        string marker = PropertyOverlayBuilder.OverlayMarkerHeader;
+        string markerEscaped = EscapeRegexLiteral(marker);
+
+        // A-14/S-08: 镜像私有属性族行级删除。
+        // 追加式覆写只能新增或覆盖键，无法把已存在的属性条目从属性服务的载入结果中抹掉，
+        // 因此镜像私有属性族必须直接从各分区 prop 文件中删行。
+        string? stripPrefix = NormalizePropertyPrefix(policy.StripPrivatePropertyPrefix);
+        if (stripPrefix is not null)
+        {
+            string stripPattern = EscapeRegexLiteral(stripPrefix) + "\\.";
+            lines.Add("# --- 抗取证：镜像私有属性族行级删除 (A-14/S-08) ---------------------");
+            lines.Add("# 追加式覆写只能新增或覆盖同名键，无法消除既有属性条目，故私有属性族");
+            lines.Add("# 必须从各分区 prop 文件中直接删行；追加块内的键不受影响。");
+            lines.Add("# 删除零命中时为恒等操作，重复引导天然幂等；只读目标自动降级并留痕。");
+            lines.Add($"if [ -n \"{stripPrefix}\" ]; then");
+            lines.Add("\tfor propfile in build.prop prop.default default.prop device.prop odm.prop; do");
+            lines.Add("\t\tfor target in /android/$propfile /android/*/$propfile \\");
+            lines.Add("\t\t\t/android/*/*/$propfile /android/*/*/*/$propfile \\");
+            lines.Add("\t\t\t/android/*/*/*/*/$propfile; do");
+            lines.Add("\t\t\t[ -f \"$target\" ] || continue");
+            lines.Add($"\t\t\tgrep -q \"^{stripPattern}\" \"$target\" 2>/dev/null || continue");
+            lines.Add("\t\t\tmount -o remount,rw /android 2>/dev/null");
+            lines.Add("\t\t\tmount -o remount,rw \"$(dirname \"$target\")\" 2>/dev/null");
+            lines.Add($"\t\t\tif sed -i '/^{stripPattern}/d' \"$target\" 2>/dev/null; then");
+            lines.Add("\t\t\t\techo \"private property lines stripped: $target\"");
+            lines.Add("\t\t\telse");
+            lines.Add("\t\t\t\techo \"private property strip skipped (not writable): $target\"");
+            lines.Add("\t\t\tfi");
+            lines.Add("\t\tdone");
+            lines.Add("\tdone");
+            lines.Add("fi");
+            lines.Add("");
+        }
+
         // A-03: build.prop 覆盖逻辑（在 chroot 交接之前生效）
         if (policy.EnableBuildPropOverlay)
         {
@@ -743,6 +882,8 @@ public sealed class InitrdCustomizerService
             lines.Add("# build.prop 中后出现的同名键覆盖先出现的同名键，追加即可实现按实例覆真。");
             lines.Add("# 覆写需覆盖全部分区的 prop 文件：属性服务按 system → vendor → odm → product →");
             lines.Add("# system_ext 的顺序依次载入，后者覆盖前者，只追加 system 会被其余分区回写。");
+            lines.Add("# 重复引导时先裁掉本产品上一轮追加的覆写块再重新追加，");
+            lines.Add("# 既保证文件不随引导次数膨胀，也保证画像变更后不留旧值。");
             lines.Add("if [ -f /etc/build.prop.override ]; then");
             lines.Add("\t[ -f /tmp/device.prop ] && > /tmp/device.prop 2>/dev/null");
             lines.Add("\tfor target in /android/system/build.prop \\");
@@ -787,6 +928,8 @@ public sealed class InitrdCustomizerService
             lines.Add("\t\tif [ -f \"$target\" ]; then");
             lines.Add("\t\t\tmount -o remount,rw /android 2>/dev/null");
             lines.Add("\t\t\tmount -o remount,rw \"$(dirname \"$target\")\" 2>/dev/null");
+            lines.Add($"\t\t\tgrep -q '{marker}' \"$target\" 2>/dev/null && \\");
+            lines.Add($"\t\t\t\tsed -i '/^{markerEscaped}/,$d' \"$target\" 2>/dev/null");
             lines.Add("\t\t\tif cat /etc/build.prop.override >> \"$target\" 2>/dev/null; then");
             lines.Add("\t\t\t\techo \"build.prop overlay appended: $target\"");
             lines.Add("\t\t\telse");
@@ -794,8 +937,40 @@ public sealed class InitrdCustomizerService
             lines.Add("\t\t\tfi");
             lines.Add("\t\tfi");
             lines.Add("\tdone");
+            lines.Add("\t# 清单之外的同名 prop 文件同样纳入：镜像的实际载入清单随发行版而异，");
+            lines.Add("\t# 只按固定清单追加会漏掉最后载入的文件，镜像原生的构建类型与启动链取值");
+            lines.Add("\t# 就会盖回覆写结果（指纹已被覆写而 ro.build.type 仍是 user 即此因）。");
+            lines.Add("\tfor propfile in build.prop prop.default default.prop device.prop odm.prop; do");
+            lines.Add("\t\tfor target in /android/$propfile /android/*/$propfile \\");
+            lines.Add("\t\t\t/android/*/*/$propfile /android/*/*/*/$propfile \\");
+            lines.Add("\t\t\t/android/*/*/*/*/$propfile; do");
+            lines.Add("\t\t\t[ -f \"$target\" ] || continue");
+            lines.Add($"\t\t\tgrep -q '{marker}' \"$target\" 2>/dev/null && continue");
+            lines.Add("\t\t\tmount -o remount,rw /android 2>/dev/null");
+            lines.Add("\t\t\tmount -o remount,rw \"$(dirname \"$target\")\" 2>/dev/null");
+            lines.Add("\t\t\tif cat /etc/build.prop.override >> \"$target\" 2>/dev/null; then");
+            lines.Add("\t\t\t\techo \"build.prop overlay appended: $target\"");
+            lines.Add("\t\t\telse");
+            lines.Add("\t\t\t\techo \"build.prop overlay write skipped (not writable): $target\"");
+            lines.Add("\t\t\tfi");
+            lines.Add("\t\tdone");
+            lines.Add("\tdone");
             lines.Add("\techo \"build.prop overlay appended\"");
             lines.Add("fi");
+            lines.Add("");
+        }
+
+        // A-14/T-04: 主机名收敛。initrd 阶段先设定内核 UTS 节点名，
+        // 覆盖「内核起来到用户空间网络守护进程接管」这一窗口内可见的默认主机名；
+        // 用户空间接管后的最终取值由开机后辅助进程再次落定。
+        string? hostName = NormalizeModulesReleaseAlias(policy.HostName);
+        if (hostName is not null)
+        {
+            lines.Add("# --- 抗取证：主机名收敛 (A-14/T-04) ----------------------------");
+            lines.Add("# 主机名取机型族代号，与 DMI product_name、ro.product.device 同源；");
+            lines.Add("# 用户空间启动后可能再次改写，最终取值由开机后辅助进程落定并回读。");
+            lines.Add($"hostname {hostName} 2>/dev/null");
+            lines.Add($"echo \"initrd hostname set: `hostname 2>/dev/null`\"");
             lines.Add("");
         }
 
@@ -841,20 +1016,32 @@ public sealed class InitrdCustomizerService
             lines.Add("");
         }
 
-        // 硬件代号去指纹配套：当下发了 androidboot.hardware 时，
-        // Android init 会按 init.${ro.boot.hardware}.rc 查找硬件初始化脚本。
+// 硬件代号去指纹配套：当下发了 androidboot.hardware 时，
+        // Android init 会按 init.${ro.hardware}.rc 查找硬件初始化脚本。
         // 原镜像仅含 init.android_x86_64.rc 等既有平台脚本，若未补建软链会导致硬件服务不加载。
         // 遍历 /android/vendor/etc/init/hw 与 /android 为目标硬件代号建立指向原有 rc 的软链。
         string? hardwareAlias = NormalizeModulesReleaseAlias(policy.HardwareAlias);
+        string? hardwareSource = NormalizeModulesReleaseAlias(policy.HardwareSourceAlias);
         if (hardwareAlias is not null)
         {
             lines.Add("# --- 硬件代号去指纹配套：硬件 init rc 别名 ----------------------");
             lines.Add("# 当下发了 androidboot.hardware 时，Android init 会按 init.${hardware}.rc");
             lines.Add("# 查找硬件初始化脚本；镜像根目录仅含 init.bliss_x86_64.rc 等既有平台脚本，");
             lines.Add("# 需补建指向原有平台 rc 的软链，否则网络配置与硬件服务不会被触发执行。");
+            lines.Add("# 优先指向与镜像原生代号同名的 rc；同名文件不存在时回落到首个非保留平台 rc。");
             lines.Add("mount -o remount,rw /android 2>/dev/null");
             lines.Add("for rcdir in /android /android/vendor/etc/init/hw /android/system/vendor/etc/init/hw; do");
             lines.Add("\tif [ -d \"$rcdir\" ]; then");
+            if (hardwareSource is not null && hardwareSource != hardwareAlias)
+            {
+                lines.Add("\t\tif [ -f \"$rcdir/init." + hardwareSource + ".rc\" ]; then");
+                lines.Add("\t\t\tln -sfn \"init." + hardwareSource + ".rc\" \"$rcdir/init." + hardwareAlias + ".rc\" 2>/dev/null");
+                lines.Add("\t\t\techo \"hardware rc alias linked: $rcdir/init." + hardwareAlias + ".rc -> init." + hardwareSource + ".rc\"");
+                lines.Add("\t\t\tcontinue");
+                lines.Add("\t\tfi");
+                lines.Add("\t\t[ -e \"$rcdir/init." + hardwareAlias + ".rc\" ] && continue");
+            }
+
             lines.Add("\t\tfor hrc in \"$rcdir\"/init.*.rc; do");
             lines.Add("\t\t\t[ -f \"$hrc\" ] || continue");
             lines.Add("\t\t\tbname=`basename \"$hrc\"`");
@@ -870,6 +1057,49 @@ public sealed class InitrdCustomizerService
             lines.Add("\t\t\tesac");
             lines.Add("\t\tdone");
             lines.Add("\tfi");
+            lines.Add("done");
+
+            // 平台 rc 内部还以 ${ro.hardware} 拼接分区表文件名（mount_all /fstab.${ro.hardware}、
+            // swapon_all 同源）。硬件代号改为机型代号后该文件名对不上，mount_all 静默空转，
+            // 表现为 /data 不挂载、eth0 取不到地址、框架起不来；rc 软链建对了也救不回挂载。
+            lines.Add("# 平台 rc 内部按 ${ro.hardware} 拼接分区表文件名，代号别名需一并覆盖。");
+            lines.Add("for hwpart in fstab; do");
+            lines.Add($"\tif [ -f \"/android/$hwpart.{hardwareSource}\" ]; then");
+            lines.Add($"\t\tln -sfn \"$hwpart.{hardwareSource}\" \"/android/$hwpart.{hardwareAlias}\" 2>/dev/null");
+            lines.Add($"\t\techo \"hardware partition alias linked: /android/$hwpart.{hardwareAlias} -> $hwpart.{hardwareSource}\"");
+            lines.Add("\tfi");
+            lines.Add("done");
+            lines.Add("");
+        }
+
+        // 硬件代号去指纹配套：HAL 库目录代号别名。
+        // libhardware 按 <name>.<ro.hardware>.<ro.board.platform>.so 的次序在各 hw 目录查找模块，
+        // 硬件代号改为机型代号后，原生代号命名的动态库不再被命中，表现为 gralloc 等 HAL 缺失。
+        // 故按原生代号检索既有动态库并补建代号别名软链；既有条目一律不覆盖。
+        if (hardwareAlias is not null && hardwareSource is not null && hardwareSource != hardwareAlias)
+        {
+            lines.Add("# --- 硬件代号去指纹配套：HAL 库目录代号别名 --------------------");
+            lines.Add("# libhardware 依次查找 <name>.<ro.hardware>.<ro.board.platform>.so 与 <name>.<ro.hardware>.so，");
+            lines.Add("# 硬件代号改为机型代号后原生代号命名的动态库不再被命中，gralloc 等 HAL 会缺失。");
+            lines.Add("# 因此按镜像原生代号检索既有动态库并补建代号别名软链，已存在的条目不覆盖。");
+            lines.Add("mount -o remount,rw /android 2>/dev/null");
+            lines.Add("for hwdir in /android/vendor/lib/hw /android/vendor/lib64/hw \\");
+            lines.Add("\t/android/system/lib/hw /android/system/lib64/hw \\");
+            lines.Add("\t/android/system/vendor/lib/hw /android/system/vendor/lib64/hw; do");
+            lines.Add("\t[ -d \"$hwdir\" ] || continue");
+            lines.Add($"\tfor hwlib in \"$hwdir\"/*\"{hardwareSource}\"*; do");
+            lines.Add("\t\t[ -f \"$hwlib\" ] || continue");
+            lines.Add("\t\thwbase=`basename \"$hwlib\"`");
+            lines.Add($"\t\thwalias=`echo \"$hwbase\" | sed 's/{hardwareSource}/{hardwareAlias}/g'`");
+            lines.Add("\t\t[ \"$hwalias\" = \"$hwbase\" ] && continue");
+            lines.Add("\t\t[ -e \"$hwdir/$hwalias\" ] && continue");
+            lines.Add("\t\tmount -o remount,rw \"$hwdir\" 2>/dev/null");
+            lines.Add("\t\tif ln -sfn \"$hwbase\" \"$hwdir/$hwalias\" 2>/dev/null; then");
+            lines.Add("\t\t\techo \"hardware hal alias linked: $hwdir/$hwalias -> $hwbase\"");
+            lines.Add("\t\telse");
+            lines.Add("\t\t\techo \"hardware hal alias skipped (not writable): $hwdir/$hwalias\"");
+            lines.Add("\t\tfi");
+            lines.Add("\tdone");
             lines.Add("done");
             lines.Add("");
         }
@@ -1036,6 +1266,28 @@ public sealed class InitrdCustomizerService
             lines.Add(") &");
         }
 
+        // A-14/T-04: 主机名落定与回读（与 Android ID 同一套开机后辅助进程机制）。
+        // 用户空间的网络守护进程会在启动期按属性重设主机名，因此必须在 sys.boot_completed 之后再落定。
+        // 直接调用 sethostname 保证 `hostname` 命令即刻返回新值；
+        // 同时写 net.hostname 与 persist.sys.hostname，保证框架侧与重启后取值一致。
+        if (hostName is not null)
+        {
+            lines.Add("");
+            lines.Add("# --- 抗取证：主机名落定与回读 (A-14/T-04) -------------------");
+            lines.Add("( t=0");
+            lines.Add("  while [ $t -lt 300 ]; do");
+            lines.Add("\t[ \"`chroot /android /system/bin/getprop sys.boot_completed 2>/dev/null`\" = \"1\" ] && break");
+            lines.Add("\tsleep 1; t=$((t + 1))");
+            lines.Add("  done");
+            lines.Add($"  chroot /android /system/bin/hostname {hostName} 2>&1");
+            lines.Add($"  chroot /android /system/bin/setprop net.hostname {hostName} 2>&1");
+            lines.Add($"  chroot /android /system/bin/setprop persist.sys.hostname {hostName} 2>&1");
+            lines.Add("  actual_host=`chroot /android /system/bin/hostname 2>/dev/null`");
+            lines.Add($"  echo \"hostname: target={hostName} actual=$actual_host net=`chroot /android /system/bin/getprop net.hostname 2>/dev/null`\" > /android/data/hostname.log");
+            lines.Add("  echo \"guest hostname applied and verified\"");
+            lines.Add(") &");
+        }
+
         // 模块加载器
         if (policy.EnableModuleLoader)
         {
@@ -1128,8 +1380,27 @@ public sealed class InitrdCustomizerService
     }
 
     /// <summary>
-    /// 读取条目内容并按 UTF-8 解码。
+    /// 把普通文本中的正则元字符转义为字面量形态，供注入脚本的 grep/sed 表达式使用。
     /// </summary>
+    /// <param name="value">待转义文本。</param>
+    /// <returns>元字符已转义的文本。</returns>
+    private static string EscapeRegexLiteral(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        foreach (char c in value)
+        {
+            if (c is '.' or '*' or '+' or '?' or '(' or ')' or '[' or ']' or '{' or '}' or '^' or '$' or '|' or '\\')
+            {
+                builder.Append('\\');
+            }
+
+            builder.Append(c);
+        }
+
+        return builder.ToString();
+    }
+
+/// <summary>读取条目内容并按 UTF-8 解码。</summary>
     /// <param name="entry">归档条目。</param>
     /// <returns>条目文本。</returns>
     private static string ReadText(CpioNewcEntry entry)

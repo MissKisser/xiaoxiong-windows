@@ -47,6 +47,12 @@ public static class PropertyOverlayBuilder
     /// <summary>默认 bootmode 标识。</summary>
     public const string DefaultBootmode = "unknown";
 
+    /// <summary>
+    /// 覆写块的首行标记。initrd 侧以该行判定「本文件已由本产品覆写过」，
+    /// 从而在重复引导时不重复追加、并允许把上一轮的覆写块整体替换为最新画像取值。
+    /// </summary>
+    public const string OverlayMarkerHeader = "# --- Auto-generated build.prop overlay by XBear ---";
+
     /// <summary>SwiftShader 软件渲染器的 EGL 硬件属性名。</summary>
     public const string SwiftShaderEglHardware = "swiftshader";
 
@@ -153,6 +159,19 @@ public static class PropertyOverlayBuilder
             props[$"ro.{partition}.build.fingerprint"] = resolvedFingerprint;
         }
 
+        // 分区级构建身份必须与 ro.build.* 同步覆写。属性服务按分区间顺序载入 prop 文件，
+        // 后载入的分区会带着镜像原生的 ro.build.type 覆盖先前的取值，
+        // 只覆写 ro.build.type 会让「指纹类型段=userdebug、类型属性=user」这类矛盾重新出现。
+        foreach (string partition in Partitions)
+        {
+            props[$"ro.{partition}.build.type"] = type;
+            props[$"ro.{partition}.build.tags"] = tags;
+            props[$"ro.{partition}.build.flavor"] = flavor;
+            props[$"ro.{partition}.build.id"] = buildId;
+            props[$"ro.{partition}.build.version.incremental"] = incremental;
+            props[$"ro.{partition}.build.description"] = $"{flavor} {DefaultReleaseVersion} {buildId} {incremental} {tags}";
+        }
+
         props["ro.bootimage.build.fingerprint"] = resolvedFingerprint;
         props["ro.bootimage.build.id"] = buildId;
         props["ro.bootimage.build.tags"] = tags;
@@ -237,7 +256,7 @@ public static class PropertyOverlayBuilder
             enableRenderSpoofing);
 
         var builder = new StringBuilder();
-        builder.AppendLine("# --- Auto-generated build.prop overlay by XBear ---");
+        builder.AppendLine(OverlayMarkerHeader);
         foreach (var (key, value) in props)
         {
             builder.Append(key).Append('=').AppendLine(value);
@@ -259,7 +278,7 @@ public static class PropertyOverlayBuilder
         var props = BuildProperties(identitySpec, enableRenderSpoofing);
 
         var builder = new StringBuilder();
-        builder.AppendLine("# --- Auto-generated build.prop overlay by XBear ---");
+        builder.AppendLine(OverlayMarkerHeader);
         foreach (var (key, value) in props)
         {
             builder.Append(key).Append('=').AppendLine(value);

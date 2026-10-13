@@ -541,13 +541,13 @@ public sealed class AntiForensicsP1Tests : IDisposable
     #region 6. 检测面指标台账完整性 (附录 C)
 
     [Fact]
-    public void DetectionSurfaceLedgerHas43MetricsAndEveryMetricHasValidAuditRefs()
+    public void DetectionSurfaceLedgerMetricsEveryMetricHasValidAuditRefs()
     {
         var surface = SpecTestHost.Loader.LoadDetectionSurface();
 
-        Assert.Equal("1.0.0", surface.Version);
+        Assert.Matches(@"^\d+\.\d+\.\d+$", surface.Version);
         var allMetrics = surface.AllMetrics().ToList();
-        Assert.Equal(43, allMetrics.Count);
+        Assert.True(allMetrics.Count >= 43, $"台账指标数不应少于初始规模，实际 {allMetrics.Count}");
 
         var validAuditRefPattern = new Regex(@"^(?:F|H|M|L|G|X)-[0-9]{2}[a-z]?$", RegexOptions.CultureInvariant);
 

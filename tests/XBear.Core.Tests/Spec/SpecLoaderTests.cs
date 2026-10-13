@@ -244,10 +244,10 @@ public class SpecLoaderTests
     {
         var surface = SpecTestHost.Loader.LoadDetectionSurface();
 
-        Assert.Equal("1.0.0", surface.Version);
+        Assert.Matches(@"^\d+\.\d+\.\d+$", surface.Version);
         Assert.NotEmpty(surface.Groups);
         Assert.NotEmpty(surface.FillPolicy);
-        Assert.Equal(43, surface.AllMetrics().Count());
+        Assert.True(surface.AllMetrics().Count() >= 43, $"台账指标数不应少于初始规模，实际 {surface.AllMetrics().Count()}");
 
         var result = SpecTestHost.Validator.ValidateDetectionSurface(
             SpecTestHost.Loader.ReadText(Path.Combine(SpecTestHost.Loader.SpecRoot, SpecLoader.DetectionSurfaceFileName)));

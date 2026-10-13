@@ -796,6 +796,431 @@ public sealed class InitrdCustomizerAntiforensicsTests : IDisposable
         Assert.Contains("hardware rc alias linked:", initText);
     }
 
+    [Fact]
+    public async Task BuildProp覆写_重复引导先裁剪旧块再追加且补充扫描清单外文件()
+    {
+        string workspace = _temp.New("bp_idem");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        // 幂等：重复引导前先裁掉本产品上一轮追加的覆写块，文件不随引导次数膨胀。
+        Assert.Contains(
+            $"grep -q '{PropertyOverlayBuilder.OverlayMarkerHeader}' \"$target\" 2>/dev/null && \\",
+            initText);
+        Assert.Contains(
+            "sed -i '/^# --- Auto-generated build\\.prop overlay by XBear ---/,$d' \"$target\" 2>/dev/null",
+            initText);
+
+        // 覆盖完整性：清单之外的同名 prop 文件也必须纳入，
+        // 否则镜像最后载入的文件会带着原生 ro.build.type 与 ro.boot.* 把覆写盖回。
+        Assert.Contains("for propfile in build.prop prop.default default.prop device.prop odm.prop; do", initText);
+        Assert.Contains("/android/*/$propfile", initText);
+        Assert.Contains("/android/*/*/$propfile", initText);
+        Assert.Contains("/android/*/*/*/$propfile", initText);
+        Assert.Contains("/android/*/*/*/*/$propfile", initText);
+        Assert.Contains(
+            "grep -q '# --- Auto-generated build.prop overlay by XBear ---' \"$target\" 2>/dev/null && continue",
+            initText);
+    }
+
+    [Fact]
+    public async Task 镜像私有属性族_注入行级删除与只读降级留痕()
+    {
+        string workspace = _temp.New("strip_prop");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        // 追加式覆写无法消除属性条目，必须从载入源删行。
+        Assert.Contains("if [ -n \"ro.bliss\" ]; then", initText);
+        Assert.Contains("grep -q \"^ro\\.bliss\\.\" \"$target\" 2>/dev/null || continue", initText);
+        Assert.Contains("sed -i '/^ro\\.bliss\\./d' \"$target\" 2>/dev/null", initText);
+
+        // 幂等：零命中即恒等；只读目标降级并留痕。
+        Assert.Contains("private property lines stripped: $target", initText);
+        Assert.Contains("private property strip skipped (not writable): $target", initText);
+    }
+
+    [Fact]
+    public async Task 镜像私有属性族_未配置时不注入任何删除语句()
+    {
+        string workspace = _temp.New("strip_prop_off");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        Assert.DoesNotContain("private property lines stripped", initText);
+        Assert.DoesNotContain("sed -i '/^ro", initText);
+    }
+
+    [Theory]
+    [InlineData("ro.bliss.", "ro.bliss")]
+    [InlineData("ro.vendor.private", "ro.vendor.private")]
+    [InlineData("  ro.custom.  ", "ro.custom")]
+    [InlineData("   ", null)]
+    public void 属性前缀归一化与空值处理(string input, string? expected)
+    {
+        Assert.Equal(expected, InitrdCustomizerService.NormalizePropertyPrefix(input));
+    }
+
+    [Theory]
+    [InlineData("ro.bliss.*")]
+    [InlineData("ro.bliss/[a-z]")]
+    [InlineData("ro bliss")]
+    [InlineData("ro.bliss{1}")]
+    public void 可改变正则语义或含非法字符的属性前缀被拒绝(string value)
+    {
+        Assert.Throws<XBearException>(() => InitrdCustomizerService.NormalizePropertyPrefix(value));
+    }
+
+    [Fact]
+    public async Task 硬件代号别名_HAL库目录按原生代号补建代号别名软链()
+    {
+        string workspace = _temp.New("hw_hal");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd",
+            HardwareAlias: "vibe12pro",
+            HardwareSourceAlias: "bliss_x86_64");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        Assert.Contains("for hwdir in /android/vendor/lib/hw /android/vendor/lib64/hw \\", initText);
+        Assert.Contains("/android/system/lib/hw /android/system/lib64/hw \\", initText);
+        Assert.Contains("for hwlib in \"$hwdir\"/*\"bliss_x86_64\"*; do", initText);
+        Assert.Contains("hwalias=`echo \"$hwbase\" | sed 's/bliss_x86_64/vibe12pro/g'`", initText);
+
+        // 幂等与降级保护：已存在的条目不覆盖，不可写时留痕。
+        Assert.Contains("[ -e \"$hwdir/$hwalias\" ] && continue", initText);
+        Assert.Contains("hardware hal alias linked: $hwdir/$hwalias -> $hwbase", initText);
+        Assert.Contains("hardware hal alias skipped (not writable): $hwdir/$hwalias", initText);
+    }
+
+    [Fact]
+    public async Task 硬件代号别名_未给出原生代号时不注入HAL软链()
+    {
+        string workspace = _temp.New("hw_hal_off");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd",
+            HardwareAlias: "vibe12pro");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        Assert.Contains("init.vibe12pro.rc", initText);
+        Assert.DoesNotContain("hardware hal alias linked", initText);
+    }
+
+    [Fact]
+    public async Task 硬件代号别名_补建平台rc内嵌代号的分区表别名()
+    {
+        string workspace = _temp.New("hw_fstab");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd",
+            HardwareAlias: "vibe12pro",
+            HardwareSourceAlias: "bliss_x86_64");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        // 平台 rc 内部以 mount_all /fstab.${ro.hardware} 与 swapon_all 同源拼接分区表文件名，
+        // 代号改名后必须同时补建 fstab 条目别名，否则 mount_all 空转、/data 不挂载、框架起不来。
+        Assert.Contains("for hwpart in fstab; do", initText);
+        Assert.Contains("if [ -f \"/android/$hwpart.bliss_x86_64\" ]; then", initText);
+        Assert.Contains(
+            "ln -sfn \"$hwpart.bliss_x86_64\" \"/android/$hwpart.vibe12pro\" 2>/dev/null",
+            initText);
+        Assert.Contains(
+            "echo \"hardware partition alias linked: /android/$hwpart.vibe12pro -> $hwpart.bliss_x86_64\"",
+            initText);
+    }
+
+    [Fact]
+    public async Task 硬件代号别名_目标代号与原生代号相同时不注入HAL软链()
+    {
+        string workspace = _temp.New("hw_hal_same");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd",
+            HardwareAlias: "bliss_x86_64",
+            HardwareSourceAlias: "bliss_x86_64");
+
+        Assert.False(policy.HardwareHalAliasEnabled);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+        Assert.DoesNotContain("hardware hal alias linked", initText);
+    }
+
+    [Fact]
+    public async Task 硬件代号别名_rc优先指向镜像原生代号平台脚本()
+    {
+        string workspace = _temp.New("hw_rc_source");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd",
+            HardwareAlias: "vibe12pro",
+            HardwareSourceAlias: "bliss_x86_64");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        Assert.Contains("if [ -f \"$rcdir/init.bliss_x86_64.rc\" ]; then", initText);
+        Assert.Contains(
+            "ln -sfn \"init.bliss_x86_64.rc\" \"$rcdir/init.vibe12pro.rc\" 2>/dev/null",
+            initText);
+
+        // 同名文件缺失时仍保留按首个非保留平台 rc 的回落路径。
+        Assert.Contains("ln -sfn \"$bname\" \"$rcdir/init.vibe12pro.rc\" 2>/dev/null", initText);
+    }
+
+    [Fact]
+    public async Task 主机名_注入开机前后两处落定与回读()
+    {
+        string workspace = _temp.New("hostname");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        // initrd 阶段：先设定内核 UTS 节点名，覆盖内核起来到用户空间接管之间的窗口。
+        Assert.Contains("hostname vibe12pro 2>/dev/null", initText);
+
+        // 开机后：与 Android ID 同一套辅助进程机制，等 sys.boot_completed 之后再落定。
+        Assert.Contains("chroot /android /system/bin/getprop sys.boot_completed", initText);
+        Assert.Contains("chroot /android /system/bin/hostname vibe12pro 2>&1", initText);
+        Assert.Contains("chroot /android /system/bin/setprop net.hostname vibe12pro 2>&1", initText);
+        Assert.Contains("chroot /android /system/bin/setprop persist.sys.hostname vibe12pro 2>&1", initText);
+        Assert.Contains("actual_host=`chroot /android /system/bin/hostname 2>/dev/null`", initText);
+        Assert.Contains("/android/data/hostname.log", initText);
+    }
+
+    [Fact]
+    public async Task 主机名_身份契约显式声明时优先于画像代号()
+    {
+        string workspace = _temp.New("hostname_spec");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var identity = new IdentitySpec
+        {
+            SerialNo = "XBSN0123456789AB",
+            AndroidId = "a1b2c3d4e5f60718",
+            Mac = "3a:1f:0c:67:89:ba",
+            DeviceProfile = profile.ToSpec(),
+            HostName = "vibe12pro-n",
+        };
+
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile,
+            identity: identity);
+
+        Assert.Equal("vibe12pro-n", policy.HostName);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+        Assert.Contains("hostname vibe12pro-n 2>/dev/null", initText);
+        Assert.Contains("setprop net.hostname vibe12pro-n", initText);
+    }
+
+    [Fact]
+    public async Task 主机名_未配置时不注入任何主机名语句()
+    {
+        string workspace = _temp.New("hostname_off");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd");
+
+        Assert.False(policy.HostNameEnabled);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+        Assert.DoesNotContain("net.hostname", initText);
+        Assert.DoesNotContain("hostname.log", initText);
+    }
+
+    [Fact]
+    public async Task 新增定制项参与指纹且变化触发重新定制()
+    {
+        string workspace = _temp.New("fp_new_items");
+        string keyPath = WriteHostKey(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var identity = new IdentitySpec
+        {
+            SerialNo = "XBSN0123456789AB",
+            AndroidId = "a1b2c3d4e5f60718",
+            Mac = "3a:1f:0c:67:89:ba",
+            DeviceProfile = profile.ToSpec(),
+        };
+
+        var baseline = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile,
+            identity: identity);
+
+        string baselineFingerprint = InitrdCustomizerService.ComputeFingerprint(baseline);
+        string initrdPath = WriteInitrd(workspace);
+
+        var service = new InitrdCustomizerService(keyPath, baseline);
+        var first = await service.CustomizeAsync(initrdPath);
+        Assert.Equal(InitrdCustomizationOutcome.Customized, first.Outcome);
+        Assert.Equal(baselineFingerprint, first.Fingerprint);
+
+        // 同策略重跑判定为已定制，指纹不变。
+        var second = await service.CustomizeAsync(initrdPath);
+        Assert.Equal(InitrdCustomizationOutcome.AlreadyCustomized, second.Outcome);
+
+        // 主机名、删除前缀与原生代号任一变化都必须让指纹变化并触发重新定制。
+        var hostChanged = baseline with { HostName = "vibe12pro-n" };
+        Assert.NotEqual(baselineFingerprint, InitrdCustomizerService.ComputeFingerprint(hostChanged));
+
+        var prefixChanged = baseline with { StripPrivatePropertyPrefix = "ro.custom." };
+        Assert.NotEqual(baselineFingerprint, InitrdCustomizerService.ComputeFingerprint(prefixChanged));
+
+        var sourceChanged = baseline with { HardwareSourceAlias = "other_hw" };
+        Assert.NotEqual(baselineFingerprint, InitrdCustomizerService.ComputeFingerprint(sourceChanged));
+
+        var third = await new InitrdCustomizerService(keyPath, hostChanged).CustomizeAsync(initrdPath);
+        Assert.Equal(InitrdCustomizationOutcome.Customized, third.Outcome);
+    }
+
+    [Fact]
+    public void 工厂方法默认补齐私有属性前缀与原生代号()
+    {
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile);
+
+        Assert.Equal(profile.Device, policy.HardwareAlias);
+        Assert.Equal(InitrdCustomizationPolicy.DefaultHardwareSourceAlias, policy.HardwareSourceAlias);
+        Assert.Equal(InitrdCustomizationPolicy.DefaultStripPrivatePropertyPrefix, policy.StripPrivatePropertyPrefix);
+        Assert.Equal(profile.Device, policy.HostName);
+        Assert.True(policy.HardwareHalAliasEnabled);
+        Assert.True(policy.StripPrivatePropertiesEnabled);
+        Assert.True(policy.HostNameEnabled);
+    }
+
+    [Fact]
+    public async Task 全套抗取证定制组合注入后归档格式仍合法()
+    {
+        string workspace = _temp.New("combo_new");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile,
+            defaultGateway: "172.25.146.2",
+            embeddedSrc: "system",
+            enableRenderSpoofing: false,
+            modulesReleaseAlias: "6.1.112-android11-perf");
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        await service.CustomizeAsync(initrdPath);
+
+        var entries = ReadEntries(initrdPath);
+        Assert.NotEmpty(entries);
+        Assert.NotNull(CpioNewcArchive.Find(entries, "init"));
+        Assert.NotNull(CpioNewcArchive.Find(entries, InitrdCustomizerService.BuildPropOverrideEntryName));
+    }
+
     private string WriteHostKey(string workspace)
     {
         string path = Path.Combine(workspace, "adbkey.pub");

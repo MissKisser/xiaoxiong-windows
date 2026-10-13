@@ -62,7 +62,7 @@ public static class KernelCommandLine
     /// <summary>引导模式对应的引导键。</summary>
     public const string BootmodeKey = AndroidBootPropertyPrefix + "bootmode";
 
-    /// <summary>硬件代号对应的引导键。</summary>
+    /// <summary>硬件代号对应的引导键。实机已证实下发该键会击穿镜像的按代号解析，当前不下发。</summary>
     public const string HardwareKey = AndroidBootPropertyPrefix + "hardware";
 
     /// <summary>
@@ -169,10 +169,16 @@ public static class KernelCommandLine
         string bootmode = bootIdentity?.Bootmode ?? "normal";
         fragments.Add(ComposeFragment(BootmodeKey, bootmode));
 
-        // 注意：androidboot.hardware 不在内核引导参数中下发。
-        // 该键属于内核级硬件平台标识，下发非镜像原生代号（如 vibe12pro）会破坏 guest 内
-        // init.${ro.boot.hardware}.rc 与 HAL 动态库（gralloc 等）的加载路径，
-        // 导致网络接口与驱动无法初始化。硬件属性压制应在用户空间通过 build.prop 覆盖层实现。
+        // androidboot.hardware 不在内核引导参数中下发（实机实测结论，见注释）。
+        //
+        // 该键属于内核级硬件平台标识：guest 的 ro.hardware / ro.boot.hardware 由内核命令行通道
+        // 直接钉死，下发非镜像原生代号会击穿镜像内部的按代号解析，实机复测表现为
+        // GraphicBufferMapper 找不到 gralloc mapper、surfaceflinger SIGABRT，
+        // 框架起不来 → sys.boot_completed 永不置位 → eth0 不取址 → ADB 不可达，整机不可用。
+        //
+        // initrd 侧的代号别名（init.<代号>.rc、/fstab.<代号>、HAL 目录软链）只能覆盖
+        // 以代号命名的文件条目，覆盖不了镜像内以原生代号硬编码的 HAL/VINTF 解析路径。
+        // 硬件代号压制必须由镜像侧先做代号适配，属已知取舍：S-07 据此维持 fail。
 
         return fragments;
     }
