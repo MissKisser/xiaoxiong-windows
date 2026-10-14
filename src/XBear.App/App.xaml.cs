@@ -4,8 +4,10 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Media.Imaging;
+using XBear.App.Services;
 using XBear.App.Theme;
 using XBear.App.ViewModels;
 using XBear.Core.Diagnostics;
@@ -16,20 +18,33 @@ namespace XBear.App;
 /// <summary>应用程序入口，负责装配依赖并把设计令牌写入应用资源。</summary>
 public partial class App : Application
 {
+    private readonly CrashLogger _crashLogger = new();
     private AppServices? _services;
 
     /// <summary>
     /// 创建应用并挂上全局异常兜底。
-    /// 未处理异常若逃逸到进程顶层，界面层无法呈现错误，表现是进程直接消失；
-    /// 这里把异常落盘，使启动失败可被事后诊断。
+    /// 接管 DispatcherUnhandledException、TaskScheduler.UnobservedTaskException 与
+    /// AppDomain.UnhandledException，将崩溃日志写入应用数据目录并弹出可见错误提示。
     /// </summary>
     public App()
     {
         NormalizeCulture();
-        DispatcherUnhandledException += (_, args) => WriteCrashLog(args.Exception);
+        DispatcherUnhandledException += (_, args) =>
+        {
+            _crashLogger.LogException(args.Exception, nameof(DispatcherUnhandledException));
+            _crashLogger.ShowCrashDialog(args.Exception);
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            _crashLogger.LogException(args.Exception, nameof(TaskScheduler.UnobservedTaskException));
+            _crashLogger.ShowCrashDialog(args.Exception);
+            args.SetObserved();
+        };
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>
         {
-            WriteCrashLog(args.ExceptionObject as Exception);
+            var exception = args.ExceptionObject as Exception;
+            _crashLogger.LogException(exception, nameof(AppDomain.UnhandledException));
+            _crashLogger.ShowCrashDialog(exception);
         };
     }
 
@@ -89,33 +104,6 @@ public partial class App : Application
         return installed.FirstOrDefault(c =>
                    string.Equals(c.TwoLetterISOLanguageName, name, StringComparison.OrdinalIgnoreCase))
                ?? installed[0];
-    }
-
-    /// <summary>
-    /// 把未处理异常写入应用数据目录下的崩溃日志，失败不影响退出流程。
-    /// </summary>
-    /// <param name="exception">待记录的异常，可为空。</param>
-    private static void WriteCrashLog(Exception? exception)
-    {
-        if (exception is null)
-        {
-            return;
-        }
-
-        try
-        {
-            string directory = ResolveDataRoot();
-            Directory.CreateDirectory(directory);
-            string path = Path.Combine(directory, "crash.log");
-
-            File.AppendAllText(
-                path,
-                $"[{DateTimeOffset.Now:O}] {exception}{Environment.NewLine}{Environment.NewLine}");
-        }
-        catch (Exception)
-        {
-            // 记录失败不得掩盖原始异常。
-        }
     }
 
     /// <summary>组合根产出的界面依赖。</summary>
@@ -184,6 +172,8 @@ public partial class App : Application
         }
         catch (Exception ex)
         {
+            _crashLogger.LogException(ex, "Startup");
+
             // 启动期失败按统一错误呈现，不把堆栈甩给用户。
             (Presentation.ErrorCategoryText text, string? remediation) = Presentation.ErrorPresenter.Describe(ex);
 
@@ -198,11 +188,7 @@ public partial class App : Application
         }
     }
 
-    private static string ResolveDataRoot() =>
-        Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "XBear");
+    private static string ResolveDataRoot() => AppPaths.ResolveDataRoot();
 
-    private static string ResolveImageRoot() =>
-        Path.Combine(AppContext.BaseDirectory, "images");
+    private static string ResolveImageRoot() => AppPaths.ResolveImagesRoot();
 }

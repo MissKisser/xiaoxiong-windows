@@ -43,15 +43,22 @@ public static class TokenResources
         Put(resources, "Color.State.Danger", Freeze(tokens.StateDanger));
         Put(resources, "Color.State.Info", Freeze(tokens.StateInfo));
 
-        Put(resources, "Space.Xs", tokens.Spacing("xs"));
-        Put(resources, "Space.Sm", tokens.Spacing("sm"));
-        Put(resources, "Space.Md", tokens.Spacing("md"));
-        Put(resources, "Space.Lg", tokens.Spacing("lg"));
-        Put(resources, "Space.Xl", tokens.Spacing("xl"));
-        Put(resources, "Space.Xxl", tokens.Spacing("xxl"));
+        // 矢量图标中的 SolidColorBrush.Color 需要纯 Color 结构体，而非 Brush 引用
+        Put(resources, "RawColor.Text.Primary", ColorOf(tokens.TextPrimary));
+        Put(resources, "RawColor.Brand.Secondary", ColorOf(tokens.BrandSecondary));
+        Put(resources, "RawColor.State.Warning", ColorOf(tokens.StateWarning));
+        Put(resources, "RawColor.State.Danger", ColorOf(tokens.StateDanger));
 
-        // Margin、Padding 等属性的类型是 Thickness，而令牌里的间距是单个数值。
-        // 同一数值另存一份 Thickness 形态，避免把 double 直接赋给 Thickness 属性时抛异常。
+        // 间距令牌在 XAML 中主要被 Margin 与 Padding 消费（属性类型均为 Thickness）。
+        // 为保证运行时直接消费与样式层解耦，Space.* 与 Thickness.* 均注入 Thickness 对象，
+        // 避免 WPF 动态资源求值时因类型不匹配（double -> Thickness）抛出 InvalidOperationException。
+        Put(resources, "Space.Xs", ThicknessOf(tokens.Spacing("xs")));
+        Put(resources, "Space.Sm", ThicknessOf(tokens.Spacing("sm")));
+        Put(resources, "Space.Md", ThicknessOf(tokens.Spacing("md")));
+        Put(resources, "Space.Lg", ThicknessOf(tokens.Spacing("lg")));
+        Put(resources, "Space.Xl", ThicknessOf(tokens.Spacing("xl")));
+        Put(resources, "Space.Xxl", ThicknessOf(tokens.Spacing("xxl")));
+
         Put(resources, "Thickness.Xs", ThicknessOf(tokens.Spacing("xs")));
         Put(resources, "Thickness.Sm", ThicknessOf(tokens.Spacing("sm")));
         Put(resources, "Thickness.Md", ThicknessOf(tokens.Spacing("md")));
@@ -59,12 +66,22 @@ public static class TokenResources
         Put(resources, "Thickness.Xl", ThicknessOf(tokens.Spacing("xl")));
         Put(resources, "Thickness.Xxl", ThicknessOf(tokens.Spacing("xxl")));
 
-        // 同理，Border.CornerRadius 的类型是 CornerRadius 而不是 double，
-        // 圆角令牌也另存一份 CornerRadius 形态供样式消费。
+        // 同理，Border.CornerRadius 的属性类型是 CornerRadius，
+        // Radius.* 与 Corner.* 均注入 CornerRadius 对象供样式安全绑定。
         Put(resources, "Corner.Sm", CornerOf(tokens.Radius("sm")));
         Put(resources, "Corner.Md", CornerOf(tokens.Radius("md")));
         Put(resources, "Corner.Lg", CornerOf(tokens.Radius("lg")));
         Put(resources, "Corner.Full", CornerOf(tokens.Radius("full")));
+
+        Put(resources, "Radius.Sm", CornerOf(tokens.Radius("sm")));
+        Put(resources, "Radius.Md", CornerOf(tokens.Radius("md")));
+        Put(resources, "Radius.Lg", CornerOf(tokens.Radius("lg")));
+        Put(resources, "Radius.Full", CornerOf(tokens.Radius("full")));
+
+        // 界面复合间距，为非均等边距提供预置 Thickness 实例
+        resources["Space.Margin.BesideIcon"] = new Thickness(tokens.Spacing("sm"));
+        resources["Space.Margin.Section"] = new Thickness(0, tokens.Spacing("xl"), 0, 0);
+        resources["Space.Margin.HeaderStack"] = new Thickness(tokens.Spacing("md"));
 
         Put(resources, "Font.Caption", (double)tokens.FontSize("caption"));
         Put(resources, "Font.Body", (double)tokens.FontSize("body"));
@@ -75,11 +92,6 @@ public static class TokenResources
         Put(resources, "Weight.Regular", WeightOf(tokens.FontWeight("regular")));
         Put(resources, "Weight.Medium", WeightOf(tokens.FontWeight("medium")));
         Put(resources, "Weight.Bold", WeightOf(tokens.FontWeight("bold")));
-
-        Put(resources, "Radius.Sm", (double)tokens.Radius("sm"));
-        Put(resources, "Radius.Md", (double)tokens.Radius("md"));
-        Put(resources, "Radius.Lg", (double)tokens.Radius("lg"));
-        Put(resources, "Radius.Full", (double)tokens.Radius("full"));
 
         Put(resources, "Motion.Fast", (double)tokens.MotionDuration("fast"));
         Put(resources, "Motion.Normal", (double)tokens.MotionDuration("normal"));
@@ -108,7 +120,7 @@ public static class TokenResources
     private static void Put(ResourceDictionary resources, string name, object value) =>
         resources[Key(name)] = value;
 
-    private static SolidColorBrush Freeze(string color)
+    private static Color ColorOf(string color)
     {
         object? converted = ColorConverter.ConvertFromString(color);
         if (converted is not Color parsed)
@@ -119,7 +131,12 @@ public static class TokenResources
                 "令牌是双端共享契约，非法取值应修正 design-tokens.json 而非在界面侧兜底。");
         }
 
-        var brush = new SolidColorBrush(parsed);
+        return parsed;
+    }
+
+    private static SolidColorBrush Freeze(string color)
+    {
+        var brush = new SolidColorBrush(ColorOf(color));
         brush.Freeze();
         return brush;
     }

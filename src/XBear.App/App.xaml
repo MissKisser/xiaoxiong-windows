@@ -36,6 +36,12 @@
             <system:String x:Key="Text.SnapshotTitle">快照</system:String>
             <system:String x:Key="Text.RestoreHint">恢复即切换磁盘链顶层</system:String>
             <system:String x:Key="Text.SnapshotHint">创建快照后可以回退到该层。恢复不可逆，须二次确认。</system:String>
+
+            <!-- 动效时长静态定义：样式级 Storyboard 必须在加载阶段冻结，动画属性不支持 DynamicResource，此处以 StaticResource 承接 -->
+            <Duration x:Key="Motion.Duration.Fast">0:0:0.150</Duration>
+            <Duration x:Key="Motion.Duration.Normal">0:0:0.250</Duration>
+            <Duration x:Key="Motion.Duration.Slow">0:0:0.400</Duration>
+
             <!-- 视觉取值一律引用设计令牌，XAML 内不出现字面量颜色、字号与间距。 -->
             <Style TargetType="Window">
                 <Setter Property="Background" Value="{DynamicResource Token.Color.Surface.Base}" />
@@ -203,7 +209,7 @@
                             <Storyboard>
                                 <DoubleAnimation Storyboard.TargetProperty="Opacity"
                                                  To="1"
-                                                 Duration="{DynamicResource Motion.Duration.Normal}" />
+                                                 Duration="{StaticResource Motion.Duration.Normal}" />
                             </Storyboard>
                         </BeginStoryboard>
                     </EventTrigger>
@@ -222,7 +228,7 @@
                                 <Storyboard>
                                     <DoubleAnimation Storyboard.TargetProperty="Opacity"
                                                      To="1"
-                                                     Duration="{DynamicResource Motion.Duration.Fast}" />
+                                                     Duration="{StaticResource Motion.Duration.Fast}" />
                                 </Storyboard>
                             </BeginStoryboard>
                         </DataTrigger.EnterActions>
@@ -241,7 +247,7 @@
                             <Storyboard>
                                 <DoubleAnimation Storyboard.TargetProperty="Opacity"
                                                  To="1"
-                                                 Duration="{DynamicResource Motion.Duration.Slow}" />
+                                                 Duration="{StaticResource Motion.Duration.Slow}" />
                             </Storyboard>
                         </BeginStoryboard>
                     </EventTrigger>

@@ -1,0 +1,41 @@
+<Project>
+
+  <!--
+    构建标识装配目标：
+    依据 spec/version.json 规范（build.idFormat = {productVersion}+{commitShort}），
+    在编译前解析当前 Git 提交的短哈希（优先环境变量 GIT_COMMIT_SHORT 或 GITHUB_SHA，无则探测 git 命令，全无则落 unknown）。
+    拼装后的 BuildId 注入 AssemblyInformationalVersion，供 BuildInfo、关于页与日志统一引用。
+  -->
+  <Target Name="ResolveGitCommitAndInformationalVersion"
+          BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo;BeforeBuild">
+    <PropertyGroup Condition="'$(GitCommitShort)' == '' and '$(GIT_COMMIT_SHORT)' != ''">
+      <GitCommitShort>$(GIT_COMMIT_SHORT)</GitCommitShort>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(GitCommitShort)' == '' and '$(GITHUB_SHA)' != ''">
+      <GitCommitShort Condition="$(GITHUB_SHA.Length) &gt;= 7">$(GITHUB_SHA.Substring(0, 7))</GitCommitShort>
+      <GitCommitShort Condition="$(GITHUB_SHA.Length) &lt; 7">$(GITHUB_SHA)</GitCommitShort>
+    </PropertyGroup>
+
+    <Exec Condition="'$(GitCommitShort)' == ''"
+          Command="git rev-parse --short=7 HEAD"
+          WorkingDirectory="$(MSBuildThisFileDirectory)"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="Low"
+          StandardErrorImportance="Low"
+          IgnoreExitCode="true"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitCommitOutput" />
+      <Output TaskParameter="ExitCode" PropertyName="_GitExitCode" />
+    </Exec>
+
+    <PropertyGroup>
+      <GitCommitShort Condition="'$(_GitExitCode)' == '0' and '$(_GitCommitOutput)' != ''">$(_GitCommitOutput.Trim())</GitCommitShort>
+      <GitCommitShort Condition="'$(GitCommitShort)' == ''">unknown</GitCommitShort>
+      <BuildId>$(ProductVersion)+$(GitCommitShort)</BuildId>
+      <InformationalVersion>$(BuildId)</InformationalVersion>
+      <AssemblyInformationalVersion>$(BuildId)</AssemblyInformationalVersion>
+    </PropertyGroup>
+  </Target>
+
+</Project>

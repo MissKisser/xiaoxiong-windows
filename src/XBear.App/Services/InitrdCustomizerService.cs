@@ -33,6 +33,7 @@ namespace XBear.App.Services;
 /// <param name="HardwareSourceAlias">镜像原生硬件代号（HAL 软链的源名，默认见 <see cref="DefaultHardwareSourceAlias"/>）。</param>
 /// <param name="StripPrivatePropertyPrefix">需要行级删除的镜像私有属性前缀，为空表示不做删除。</param>
 /// <param name="HostName">guest 主机名，取值为机型族代号。</param>
+/// <param name="RootPropertyRewriteContent">需要行级取值改写的根级键清单文本，由 PropertyOverlayBuilder 生成；为空表示不做改写。</param>
 public sealed record InitrdCustomizationPolicy(
     int AdbGuestPort,
     string AdbPublicKey,
@@ -53,7 +54,8 @@ public sealed record InitrdCustomizationPolicy(
     string? HardwareAlias = null,
     string? HardwareSourceAlias = null,
     string? StripPrivatePropertyPrefix = null,
-    string? HostName = null)
+    string? HostName = null,
+    string? RootPropertyRewriteContent = null)
 {
     /// <summary>
     /// 镜像原生硬件代号的缺省取值。
@@ -93,6 +95,13 @@ public sealed record InitrdCustomizationPolicy(
     public bool HostNameEnabled => !string.IsNullOrWhiteSpace(HostName);
 
     /// <summary>
+    /// 是否启用根级属性键的行级取值改写。
+    /// 追加式覆写只能新增键，改不了镜像 prop 文件里已存在的根级键取值，
+    /// 镜像原生的构建类型与启动链取值会把追加结果盖回，必须另行逐键改写。
+    /// </summary>
+    public bool RootPropertyRewriteEnabled => !string.IsNullOrWhiteSpace(RootPropertyRewriteContent);
+
+    /// <summary>
     /// 是否启用了任何抗取证扩展定制项。
     /// 当全部为默认关闭值时，指纹计算完全等价于传统策略，确保已有镜像产物不被误判二次定制。
     /// </summary>
@@ -111,7 +120,8 @@ public sealed record InitrdCustomizationPolicy(
         HardwareAliasEnabled ||
         HardwareHalAliasEnabled ||
         StripPrivatePropertiesEnabled ||
-        HostNameEnabled;
+        HostNameEnabled ||
+        RootPropertyRewriteEnabled;
 
     /// <summary>
     /// 便捷工厂方法：按画像与身份对象构建全套抗取证定制策略。
@@ -135,6 +145,7 @@ public sealed record InitrdCustomizationPolicy(
     /// <param name="stripPrivatePropertyPrefix">待行级删除的镜像私有属性前缀，
     /// 为空时取 <see cref="DefaultStripPrivatePropertyPrefix"/>。</param>
     /// <param name="hostName">guest 主机名，为空时依次取身份契约中的主机名与画像的 Device 代号。</param>
+    /// <param name="enableRootPropertyRewrite">是否启用根级属性键的行级取值改写，默认 true。</param>
     /// <returns>抗取证 initrd 定制策略。</returns>
     public static InitrdCustomizationPolicy CreateAntiforensicsPolicy(
         int adbGuestPort,
@@ -154,13 +165,18 @@ public sealed record InitrdCustomizationPolicy(
         string? hardwareAlias = null,
         string? hardwareSourceAlias = null,
         string? stripPrivatePropertyPrefix = null,
-        string? hostName = null)
+        string? hostName = null,
+        bool enableRootPropertyRewrite = true)
     {
         ArgumentNullException.ThrowIfNull(profile);
 
         string propContent = identity is not null
             ? PropertyOverlayBuilder.BuildBuildPropContent(identity, enableRenderSpoofing)
             : PropertyOverlayBuilder.BuildBuildPropContent(profile, enableRenderSpoofing: enableRenderSpoofing);
+
+        string rootRewriteContent = identity is not null
+            ? PropertyOverlayBuilder.BuildRootPropertyRewriteContent(identity)
+            : PropertyOverlayBuilder.BuildRootPropertyRewriteContent(profile);
 
         string? targetAndroidId = identity?.AndroidId;
 
@@ -189,7 +205,8 @@ public sealed record InitrdCustomizationPolicy(
             HardwareAlias: hardwareAlias ?? profile.Device,
             HardwareSourceAlias: hardwareSourceAlias ?? DefaultHardwareSourceAlias,
             StripPrivatePropertyPrefix: stripPrivatePropertyPrefix ?? DefaultStripPrivatePropertyPrefix,
-            HostName: resolvedHostName);
+            HostName: resolvedHostName,
+            RootPropertyRewriteContent: enableRootPropertyRewrite ? rootRewriteContent : null);
     }
 
     /// <summary>返回首个非空白取值，全部空白时返回 null。</summary>
@@ -256,6 +273,9 @@ public sealed class InitrdCustomizerService
 
     /// <summary>initrd 内内嵌安装态 SRC 标记条目名。</summary>
     public const string BootSrcEntryName = "etc/boot_src";
+
+    /// <summary>initrd 内根级属性键行级改写清单条目名。</summary>
+    public const string RootPropertyRewriteEntryName = "etc/prop.rewrite";
 
     /// <summary>guest 内 adbd 的固定监听端口，与端口转发目标保持一致。</summary>
     public const int DefaultAdbGuestPort = 5555;
@@ -423,6 +443,9 @@ public sealed class InitrdCustomizerService
             parts.Add(policy.HostNameEnabled
                 ? $"hostname:{NormalizeModulesReleaseAlias(policy.HostName)}"
                 : "hostname:none");
+            parts.Add(policy.RootPropertyRewriteEnabled
+                ? $"root_rewrite:1:{NormalizeRootPropertyRewriteContent(policy.RootPropertyRewriteContent)}"
+                : "root_rewrite:0");
         }
 
         string material = string.Join("\n", parts);
@@ -488,6 +511,121 @@ public sealed class InitrdCustomizerService
         }
 
         return normalized;
+    }
+
+    /// <summary>
+    /// 解析根级属性键行级改写清单文本，返回按清单顺序排列的键值对。
+    /// 该文本会决定注入脚本的 grep 与 sed 表达式，因此只接受不会改变脚本语义的字符集：
+    /// 属性名只允许字母、数字与 . _ -，取值只允许字母、数字与 . _ - + / : 及空格，
+    /// 任何引号、变量展开、反斜杠与命令分隔符一律拒绝，在宿主侧提前失败优于产出语义被改写的脚本。
+    /// </summary>
+    /// <param name="content">改写清单文本，可为空。</param>
+    /// <returns>按清单顺序排列的键值对序列；空白或纯注释文本返回空序列。</returns>
+    /// <exception cref="XBearException">清单中存在非法行或缺少等号时抛出。</exception>
+    public static IReadOnlyList<KeyValuePair<string, string>> ParseRootPropertyRewrites(string? content)
+    {
+        var rewrites = new List<KeyValuePair<string, string>>();
+
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return rewrites;
+        }
+
+        foreach (string rawLine in content.Split('\n'))
+        {
+            string line = rawLine.Trim();
+
+            if (line.Length == 0 || line.StartsWith('#'))
+            {
+                continue;
+            }
+
+            int separator = line.IndexOf('=');
+            if (separator <= 0 || separator == line.Length - 1)
+            {
+                throw new XBearException(
+                    ErrorCategory.Spec,
+                    $"根级属性改写清单行缺少等号或键值：{line}",
+                    "每行必须是 key=value 形态，空行与以 # 开头的注释行会被忽略。");
+            }
+
+            string key = line[..separator].Trim();
+            string value = line[(separator + 1)..].Trim();
+
+            if (!IsValidRewriteKey(key) || !IsValidRewriteValue(value))
+            {
+                throw new XBearException(
+                    ErrorCategory.Spec,
+                    $"根级属性改写清单含非法键值：{line}",
+                    "属性名只允许字母、数字与 . _ -，取值只允许字母、数字与 . _ - + / : 及空格。");
+            }
+
+            rewrites.Add(new KeyValuePair<string, string>(key, value));
+        }
+
+        return rewrites;
+    }
+
+    /// <summary>
+    /// 归一化根级属性键行级改写清单文本，供指纹计算使用。
+    /// </summary>
+    /// <param name="content">改写清单文本，可为空。</param>
+    /// <returns>逐行去首尾空白并以换行拼接的规范文本；空白输入返回空串。</returns>
+    public static string NormalizeRootPropertyRewriteContent(string? content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return string.Empty;
+        }
+
+        return string.Join(
+            "\n",
+            content
+                .Split('\n')
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0));
+    }
+
+    /// <summary>校验属性名是否只含不会改变注入脚本语义的字符。</summary>
+    /// <param name="key">属性名。</param>
+    /// <returns>合法返回 true。</returns>
+    private static bool IsValidRewriteKey(string key)
+    {
+        if (key.Length == 0 || (!char.IsAsciiLetter(key[0]) && key[0] != '_'))
+        {
+            return false;
+        }
+
+        foreach (char c in key)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>校验属性取值是否只含不会改变注入脚本语义的字符。</summary>
+    /// <param name="value">属性取值。</param>
+    /// <returns>合法返回 true。</returns>
+    private static bool IsValidRewriteValue(string value)
+    {
+        if (value.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (char c in value)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('.' or '_' or '-' or '+' or '/' or ':' or ' '))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -611,6 +749,17 @@ public sealed class InitrdCustomizerService
         else
         {
             CpioNewcArchive.RemoveEntry(entries, BootSrcEntryName);
+        }
+
+        if (policy.RootPropertyRewriteEnabled)
+        {
+            byte[] content = Encoding.UTF8.GetBytes(policy.RootPropertyRewriteContent!);
+            CpioNewcArchive.SetOrAddEntry(entries, RootPropertyRewriteEntryName, content);
+            customized.Add(RootPropertyRewriteEntryName);
+        }
+        else
+        {
+            CpioNewcArchive.RemoveEntry(entries, RootPropertyRewriteEntryName);
         }
 
         foreach (CpioNewcEntry entry in entries)
@@ -866,6 +1015,46 @@ public sealed class InitrdCustomizerService
             lines.Add("\t\t\telse");
             lines.Add("\t\t\t\techo \"private property strip skipped (not writable): $target\"");
             lines.Add("\t\t\tfi");
+            lines.Add("\t\tdone");
+            lines.Add("\tdone");
+            lines.Add("fi");
+            lines.Add("");
+        }
+
+        // A-03/S-05/S-10: 根级属性键的行级取值改写。
+        // 追加式覆写只能新增键，改不了镜像 prop 文件里已经存在的根级键取值：镜像最后被载入的
+        // prop 文件带着原生的 ro.build.type 与 ro.boot.* 根级键，会把追加块的结果盖回镜像原值
+        // （构建指纹的类型段已是 userdebug 而类型属性仍是 user 即此因）。
+        // 因此对已存在的目标键做行级取值改写；文件里没有该键时保持现状，由追加块兜底。
+        IReadOnlyList<KeyValuePair<string, string>> rootRewrites =
+            ParseRootPropertyRewrites(policy.RootPropertyRewriteContent);
+        if (rootRewrites.Count > 0)
+        {
+            lines.Add("# --- 抗取证：根级属性键取值改写 (A-03/S-05/S-10) ----------------");
+            lines.Add("# 追加式覆写只能新增键，无法改写镜像 prop 文件里已存在的根级键取值；");
+            lines.Add("# 镜像最后载入的文件带着原生 ro.build.type 与 ro.boot.*，会把追加块盖回原值。");
+            lines.Add("# 故对已存在的目标键做行级取值改写：文件里没有该键时保持现状，由追加块兜底。");
+            lines.Add("# 改写天然幂等（重复引导把同一取值写回自身），只读目标自动降级并留痕。");
+            lines.Add($"if [ -f /{RootPropertyRewriteEntryName} ]; then");
+            lines.Add("\tfor propfile in build.prop prop.default default.prop device.prop odm.prop; do");
+            lines.Add("\t\tfor target in /android/$propfile /android/*/$propfile \\");
+            lines.Add("\t\t\t/android/*/*/$propfile /android/*/*/*/$propfile \\");
+            lines.Add("\t\t\t/android/*/*/*/*/$propfile; do");
+            lines.Add("\t\t\t[ -f \"$target\" ] || continue");
+            foreach (KeyValuePair<string, string> rewrite in rootRewrites)
+            {
+                string keyPattern = EscapeRegexLiteral(rewrite.Key) + "=";
+                lines.Add($"\t\t\tif grep -q '^{keyPattern}' \"$target\" 2>/dev/null; then");
+                lines.Add("\t\t\t\tmount -o remount,rw /android 2>/dev/null");
+                lines.Add("\t\t\t\tmount -o remount,rw \"$(dirname \"$target\")\" 2>/dev/null");
+                lines.Add($"\t\t\t\tif sed -i 's|^{keyPattern}.*|{rewrite.Key}={rewrite.Value}|' \"$target\" 2>/dev/null; then");
+                lines.Add($"\t\t\t\t\techo \"root property rewritten: {rewrite.Key}={rewrite.Value} in $target\"");
+                lines.Add("\t\t\t\telse");
+                lines.Add($"\t\t\t\t\techo \"root property rewrite skipped (not writable): {rewrite.Key} in $target\"");
+                lines.Add("\t\t\t\tfi");
+                lines.Add("\t\t\tfi");
+            }
+
             lines.Add("\t\tdone");
             lines.Add("\tdone");
             lines.Add("fi");

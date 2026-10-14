@@ -53,6 +53,12 @@ public static class PropertyOverlayBuilder
     /// </summary>
     public const string OverlayMarkerHeader = "# --- Auto-generated build.prop overlay by XBear ---";
 
+    /// <summary>
+    /// 根级改写块的首行标记。改写块本身不追加任何键，只声明需要行级改写取值的键，
+    /// 该行用于让 initrd 侧判定「本产物带有根级改写清单」。
+    /// </summary>
+    public const string RootPropertyRewriteMarkerHeader = "# --- Auto-generated root property rewrite by XBear ---";
+
     /// <summary>SwiftShader 软件渲染器的 EGL 硬件属性名。</summary>
     public const string SwiftShaderEglHardware = "swiftshader";
 
@@ -60,6 +66,28 @@ public static class PropertyOverlayBuilder
     public const string PastelVulkanHardware = "pastel";
 
     private static readonly string[] Partitions = { "system", "vendor", "odm", "product", "system_ext" };
+
+    /// <summary>
+    /// 需要行级取值改写的根级键清单。顺序即改写顺序，与覆写块的载入顺序无关。
+    /// 该清单只收录「镜像 prop 文件中已存在根级同名键」的条目：
+    /// 追加式覆写只能新增键，无法改写后载入文件里已存在的根级键取值，
+    /// 镜像原生的构建类型与启动链取值会把追加结果盖回，构成构建类型与指纹、
+    /// 启动链与能力面的自洽破绽。
+    /// </summary>
+    private static readonly string[] RootRewriteKeys =
+    {
+        "ro.build.type",
+        "ro.build.tags",
+        "ro.boot.flash.locked",
+        "ro.boot.vbmeta.device_state",
+        "ro.boot.verifiedbootstate",
+        "ro.boot.veritymode",
+    };
+
+    /// <summary>
+    /// 需要行级取值改写的根级键清单（只读视图）。
+    /// </summary>
+    public static IReadOnlyList<string> RootPropertyRewriteKeyList => RootRewriteKeys;
 
     /// <summary>
     /// 从完整身份契约对象生成属性字典。
@@ -280,6 +308,104 @@ public static class PropertyOverlayBuilder
         var builder = new StringBuilder();
         builder.AppendLine(OverlayMarkerHeader);
         foreach (var (key, value) in props)
+        {
+            builder.Append(key).Append('=').AppendLine(value);
+        }
+
+        return builder.ToString();
+    }
+
+    /// <summary>
+    /// 生成需要行级取值改写的根级键值对。
+    /// 取值直接取自同一套画像与身份派生结果，不另立派生分支，
+    /// 保证改写目标值与追加覆写块逐键同源。
+    /// </summary>
+    /// <param name="profile">机型族画像。</param>
+    /// <param name="fingerprint">构建指纹，为空时按画像与构建身份合成。</param>
+    /// <param name="buildIdentity">构建身份规格，可为空。</param>
+    /// <param name="bootIdentity">启动链规格，可为空。</param>
+    /// <returns>按清单顺序排列的根级键值对字典。</returns>
+    public static IReadOnlyDictionary<string, string> BuildRootPropertyRewrites(
+        DeviceProfile profile,
+        string? fingerprint = null,
+        BuildIdentitySpec? buildIdentity = null,
+        BootIdentitySpec? bootIdentity = null)
+    {
+        IReadOnlyDictionary<string, string> props = BuildProperties(
+            profile,
+            serialNo: null,
+            fingerprint: fingerprint,
+            buildIdentity: buildIdentity,
+            bootIdentity: bootIdentity);
+
+        var rewrites = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string key in RootRewriteKeys)
+        {
+            if (props.TryGetValue(key, out string? value))
+            {
+                rewrites[key] = value;
+            }
+        }
+
+        return rewrites;
+    }
+
+    /// <summary>
+    /// 从完整身份契约对象生成需要行级取值改写的根级键值对。
+    /// </summary>
+    /// <param name="identitySpec">设备身份契约规格。</param>
+    /// <returns>按清单顺序排列的根级键值对字典。</returns>
+    public static IReadOnlyDictionary<string, string> BuildRootPropertyRewrites(IdentitySpec identitySpec)
+    {
+        ArgumentNullException.ThrowIfNull(identitySpec);
+
+        IReadOnlyDictionary<string, string> props = BuildProperties(identitySpec);
+
+        var rewrites = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (string key in RootRewriteKeys)
+        {
+            if (props.TryGetValue(key, out string? value))
+            {
+                rewrites[key] = value;
+            }
+        }
+
+        return rewrites;
+    }
+
+    /// <summary>
+    /// 生成根级改写清单文本。initrd 侧按该清单对已存在的同名根级键做行级取值改写。
+    /// </summary>
+    /// <param name="profile">机型族画像。</param>
+    /// <param name="fingerprint">构建指纹，为空时按画像与构建身份合成。</param>
+    /// <param name="buildIdentity">构建身份规格，可为空。</param>
+    /// <param name="bootIdentity">启动链规格，可为空。</param>
+    /// <returns>格式化后的根级改写清单文本。</returns>
+    public static string BuildRootPropertyRewriteContent(
+        DeviceProfile profile,
+        string? fingerprint = null,
+        BuildIdentitySpec? buildIdentity = null,
+        BootIdentitySpec? bootIdentity = null)
+    {
+        return RenderRootPropertyRewriteContent(
+            BuildRootPropertyRewrites(profile, fingerprint, buildIdentity, bootIdentity));
+    }
+
+    /// <summary>
+    /// 从完整身份契约对象生成根级改写清单文本。
+    /// </summary>
+    /// <param name="identitySpec">设备身份契约规格。</param>
+    /// <returns>格式化后的根级改写清单文本。</returns>
+    public static string BuildRootPropertyRewriteContent(IdentitySpec identitySpec)
+    {
+        return RenderRootPropertyRewriteContent(BuildRootPropertyRewrites(identitySpec));
+    }
+
+    private static string RenderRootPropertyRewriteContent(IReadOnlyDictionary<string, string> rewrites)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine(RootPropertyRewriteMarkerHeader);
+        foreach (var (key, value) in rewrites)
         {
             builder.Append(key).Append('=').AppendLine(value);
         }

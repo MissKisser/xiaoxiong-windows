@@ -17,7 +17,30 @@
     <InvariantGlobalization>true</InvariantGlobalization>
     <Product>小熊模拟器</Product>
     <Company>Xiaoxiong Emulator</Company>
-    <Version>0.1.0</Version>
+
+    <!--
+      版本契约规范：产品版本与规格版本是独立递增序列，禁止代码中硬编码任何版本字符串。
+      构建期由 MSBuild 属性函数直接读取 spec/spec/version.json 中的 product.version，
+      无契约文件时通过 0.1.0 兜底，并支持 CI 或命令行通过 -p:ProductVersion=... 显式覆盖。
+    -->
+    <_SpecVersionJson Condition="'$(_SpecVersionJson)' == '' and '$(XBEAR_SPEC_VERSION_JSON)' != ''">$(XBEAR_SPEC_VERSION_JSON)</_SpecVersionJson>
+    <_SpecVersionJson Condition="'$(_SpecVersionJson)' == '' and Exists('$(MSBuildThisFileDirectory)spec\spec\version.json')">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)spec\spec\version.json'))</_SpecVersionJson>
+    <_SpecVersionJson Condition="'$(_SpecVersionJson)' == '' and Exists('$(MSBuildThisFileDirectory)..\spec\version.json')">$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\spec\version.json'))</_SpecVersionJson>
+    <_SpecVersionJsonText Condition="'$(_SpecVersionJson)' != '' and Exists('$(_SpecVersionJson)')">$([System.IO.File]::ReadAllText('$(_SpecVersionJson)'))</_SpecVersionJsonText>
+
+    <_ProductVersionFromContract Condition="'$(_SpecVersionJsonText)' != ''">$([System.Text.RegularExpressions.Regex]::Match('$(_SpecVersionJsonText)', '\"product\"\s*:\s*\{[^{}]*\"version\"\s*:\s*\"([0-9A-Za-z\.\-]+)\"').Groups[1].Value)</_ProductVersionFromContract>
+
+    <ProductVersion Condition="'$(ProductVersion)' == '' and '$(_ProductVersionFromContract)' != ''">$(_ProductVersionFromContract)</ProductVersion>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">0.1.0</ProductVersion>
+
+    <Version>$(ProductVersion)</Version>
+    <AssemblyVersion>$(ProductVersion).0</AssemblyVersion>
+    <FileVersion>$(ProductVersion).0</FileVersion>
+    <!-- 关闭 .NET SDK 默认追加的完整源修订哈希，保证 AssemblyInformationalVersion 严格遵循契约的 {productVersion}+{commitShort} 格式 -->
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">$(ProductVersion)+unknown</InformationalVersion>
+    <AssemblyInformationalVersion Condition="'$(AssemblyInformationalVersion)' == ''">$(InformationalVersion)</AssemblyInformationalVersion>
+
     <NoWarn>$(NoWarn);CS1591</NoWarn>
   </PropertyGroup>
 

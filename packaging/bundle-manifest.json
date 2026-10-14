@@ -1,0 +1,68 @@
+{
+  "product": {
+    "nameZh": "小熊模拟器",
+    "nameEn": "Xiaoxiong Emulator",
+    "executable": "app/XBear.App.exe"
+  },
+  "layout": {
+    "app": "app",
+    "spec": "spec",
+    "qemu": "qemu",
+    "platformTools": "platform-tools",
+    "images": "images"
+  },
+  "qemu": {
+    "version": "11.1.0",
+    "description": "Windows 端 x86_64 虚拟化运行时，通过 WHPX 调用硬件加速。精简剔除非 x86 架构二进制与文档以将体积从 1.2GB 控制在 ~300MB。",
+    "localCandidates": [
+      "C:\\Program Files\\qemu",
+      "%LocalAppData%\\Programs\\qemu"
+    ],
+    "ci": {
+      "downloadUrl": "https://qemu.weilnetz.de/w64/2026/qemu-w64-setup-20260811.exe",
+      "sha512": "5bcf9eed634e8575a37b74f445af41a2fe4106da512d0c30c368301d4c105037fdfab40a5287367a28a957624cddebbc8c07e16c88ab6634f554cdf3d16bf543",
+      "installerExtractArgs": "/S /D="
+    },
+    "bundleRules": {
+      "includeExecutables": [
+        "qemu-system-x86_64.exe",
+        "qemu-img.exe"
+      ],
+      "includeLibraries": [
+        "*.dll"
+      ],
+      "includeSharePaths": [
+        "bios-256k.bin",
+        "bios.bin",
+        "edk2-x86_64-code.fd",
+        "edk2-i386-vars.fd",
+        "qboot.bin",
+        "kvmvapic.bin",
+        "linuxboot_dma.bin",
+        "multiboot_dma.bin",
+        "vgabios-stdvga.bin",
+        "vgabios-virtio.bin",
+        "keymaps"
+      ]
+    }
+  },
+  "platformTools": {
+    "version": "37.0.1",
+    "description": "Android 调试桥（adb）宿主侧工具组件，用于实例通信、应用安装与文件传输通道。",
+    "localCandidates": [
+      "%LocalAppData%\\Android\\Sdk\\platform-tools",
+      "PATH"
+    ],
+    "ci": {
+      "downloadUrl": "https://dl.google.com/android/repository/platform-tools_r37.0.1-win.zip",
+      "sha256": "45f4d63113e895ebde0c90f194099a4676b6ac653bd28d54314a9e022bbc1a99"
+    },
+    "bundleRules": {
+      "includeFiles": [
+        "adb.exe",
+        "AdbWinApi.dll",
+        "AdbWinUsbApi.dll"
+      ]
+    }
+  }
+}

@@ -574,13 +574,32 @@ public sealed class AdbClient : IAdbFileTransferClient
         }
     }
 
+    /// <summary>
+    /// 定位 adb 可执行文件路径。优先检查安装包内捆绑的 platform-tools 与环境变量，
+    /// 未命中时回退为裸命令 "adb" 依赖系统 PATH 解析。
+    /// </summary>
+    /// <returns>adb 可执行文件路径或命令名。</returns>
+    public static string ResolveAdbExecutable()
+    {
+        foreach (string directory in AppPaths.BuildPreferredAdbDirectories())
+        {
+            string candidate = Path.Combine(directory, "adb.exe");
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return "adb";
+    }
+
     private static bool TryStartAdbServer()
     {
         try
         {
             using var proc = Process.Start(new ProcessStartInfo
             {
-                FileName = "adb",
+                FileName = ResolveAdbExecutable(),
                 Arguments = "start-server",
                 UseShellExecute = false,
                 CreateNoWindow = true,

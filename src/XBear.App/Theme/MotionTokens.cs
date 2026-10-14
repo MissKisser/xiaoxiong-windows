@@ -29,7 +29,13 @@ public static class MotionTokens
 
         foreach (string tier in Tiers)
         {
-            resources[Key(tier)] = DurationOf(tokens.MotionDuration(tier));
+            Duration duration = DurationOf(tokens.MotionDuration(tier));
+            resources[Key(tier)] = duration;
+
+            // XAML 中既有全小写引用（Motion.Duration.fast），也有大写首字母引用（Motion.Duration.Fast），
+            // 两者均行登记以提供完整的大小写兼容性。
+            string capitalized = char.ToUpperInvariant(tier[0]) + tier[1..];
+            resources[Key(capitalized)] = duration;
         }
     }
 

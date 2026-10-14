@@ -89,6 +89,11 @@ public sealed class QemuPaths
             return candidates;
         }
 
+        foreach (var preferred in AppPaths.BuildPreferredQemuDirectories())
+        {
+            Append(preferred);
+        }
+
         var pathVariable = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
         foreach (var entry in pathVariable.Split(
                      Path.PathSeparator,

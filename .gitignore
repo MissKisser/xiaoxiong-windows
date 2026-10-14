@@ -11,6 +11,11 @@ obj/
 *.suo
 /artifacts/
 /publish/
+/dist/
+/packaging/dist/
+/packaging/staging/
+/packaging/downloads/
+/packaging/output/
 
 # IDE
 /.vs/

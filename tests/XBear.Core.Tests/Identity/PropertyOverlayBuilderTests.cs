@@ -255,4 +255,125 @@ public sealed class PropertyOverlayBuilderTests
 
         Assert.StartsWith(PropertyOverlayBuilder.OverlayMarkerHeader, content, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void 根级改写键清单即判据要求的六键()
+    {
+        Assert.Equal(
+            new[]
+            {
+                "ro.build.type",
+                "ro.build.tags",
+                "ro.boot.flash.locked",
+                "ro.boot.vbmeta.device_state",
+                "ro.boot.verifiedbootstate",
+                "ro.boot.veritymode",
+            },
+            PropertyOverlayBuilder.RootPropertyRewriteKeyList);
+    }
+
+    [Fact]
+    public void 根级改写取值与覆写字典逐键同源()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        var props = PropertyOverlayBuilder.BuildProperties(profile);
+        var rewrites = PropertyOverlayBuilder.BuildRootPropertyRewrites(profile);
+
+        // 改写目标值必须与追加覆写块的目标值完全一致：两套取值一旦分叉，
+        // 行级改写与追加覆写会互相覆盖，构建类型与启动链画像将再次自相矛盾。
+        Assert.Equal(PropertyOverlayBuilder.RootPropertyRewriteKeyList.Count, rewrites.Count);
+        foreach (string key in PropertyOverlayBuilder.RootPropertyRewriteKeyList)
+        {
+            Assert.Equal(props[key], rewrites[key]);
+        }
+    }
+
+    [Fact]
+    public void 根级改写取值随身份规格同步变化()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        var build = new BuildIdentitySpec { Type = "eng", Tags = "test-keys" };
+        var boot = new BootIdentitySpec
+        {
+            FlashLocked = "1",
+            VbmetaDeviceState = "red",
+            VerifiedBootState = "red",
+            VerityMode = "restart"
+        };
+
+        var rewrites = PropertyOverlayBuilder.BuildRootPropertyRewrites(profile, buildIdentity: build, bootIdentity: boot);
+
+        Assert.Equal("eng", rewrites["ro.build.type"]);
+        Assert.Equal("test-keys", rewrites["ro.build.tags"]);
+        Assert.Equal("1", rewrites["ro.boot.flash.locked"]);
+        Assert.Equal("red", rewrites["ro.boot.vbmeta.device_state"]);
+        Assert.Equal("red", rewrites["ro.boot.verifiedbootstate"]);
+        Assert.Equal("restart", rewrites["ro.boot.veritymode"]);
+    }
+
+    [Fact]
+    public void 根级改写键值消除构建类型与指纹的断裂()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        var identity = new IdentitySpec
+        {
+            SerialNo = "XBSN0123456789AB",
+            AndroidId = "a1b2c3d4e5f60718",
+            Mac = "3a:1f:0c:67:89:ba",
+            DeviceProfile = profile.ToSpec(),
+        };
+
+        var props = PropertyOverlayBuilder.BuildProperties(identity);
+        var rewrites = PropertyOverlayBuilder.BuildRootPropertyRewrites(identity);
+
+        // 指纹类型段与被改写的根级类型键必须是同一个取值，否则一致性校验可直接命中破绽。
+        string[] segments = props["ro.build.fingerprint"].Split(':');
+        Assert.Equal(3, segments.Length);
+        Assert.Equal(rewrites["ro.build.type"], segments[2].Split('/')[0]);
+        Assert.Equal(rewrites["ro.build.tags"], segments[2].Split('/')[1]);
+
+        // 启动链弱画像三项同样以改写清单为准。
+        Assert.Equal(PropertyOverlayBuilder.DefaultFlashLocked, rewrites["ro.boot.flash.locked"]);
+        Assert.Equal(PropertyOverlayBuilder.DefaultVbmetaDeviceState, rewrites["ro.boot.vbmeta.device_state"]);
+        Assert.Equal(PropertyOverlayBuilder.DefaultVerifiedBootState, rewrites["ro.boot.verifiedbootstate"]);
+        Assert.Equal(PropertyOverlayBuilder.DefaultVerityMode, rewrites["ro.boot.veritymode"]);
+    }
+
+    [Fact]
+    public void 根级改写清单文本首行为标记且逐行可解析()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        string content = PropertyOverlayBuilder.BuildRootPropertyRewriteContent(profile);
+
+        Assert.StartsWith(PropertyOverlayBuilder.RootPropertyRewriteMarkerHeader, content, StringComparison.Ordinal);
+
+        string[] dataLines = content
+            .Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .ToArray();
+
+        Assert.Equal(PropertyOverlayBuilder.RootPropertyRewriteKeyList.Count, dataLines.Length);
+        for (int i = 0; i < dataLines.Length; i++)
+        {
+            Assert.StartsWith(PropertyOverlayBuilder.RootPropertyRewriteKeyList[i] + "=", dataLines[i], StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void 身份契约导出的根级改写与画像导出的完全一致()
+    {
+        DeviceProfile profile = CreateTestProfile();
+        var identity = new IdentitySpec
+        {
+            SerialNo = "XBSN0123456789AB",
+            AndroidId = "a1b2c3d4e5f60718",
+            Mac = "3a:1f:0c:67:89:ba",
+            DeviceProfile = profile.ToSpec(),
+        };
+
+        Assert.Equal(
+            PropertyOverlayBuilder.BuildRootPropertyRewrites(profile),
+            PropertyOverlayBuilder.BuildRootPropertyRewrites(identity));
+    }
 }

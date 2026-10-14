@@ -13,6 +13,9 @@ public sealed class SpecLoader
     /// <summary>输出目录下规格子目录名。</summary>
     public const string SpecDirectoryName = "spec";
 
+    /// <summary>覆盖规格根默认探测结果的环境变量名。</summary>
+    public const string SpecRootEnvironmentVariable = "XBEAR_SPEC_ROOT";
+
     /// <summary>schema 子目录名。</summary>
     public const string SchemaDirectoryName = "schema";
 
@@ -135,12 +138,32 @@ public sealed class SpecLoader
         WriteIndented = true
     };
 
-    /// <summary>以程序目录下的 spec/ 为根的默认读取器。</summary>
-    public static SpecLoader Default { get; } =
-        new(Path.Combine(AppContext.BaseDirectory, SpecDirectoryName));
+    /// <summary>
+    /// 默认读取器。规格根按安装目录优先、源码树回退的顺序定位，
+    /// 详见 <see cref="SpecRootResolver"/>。
+    /// </summary>
+    public static SpecLoader Default { get; } = new(ResolveDefaultSpecRoot());
 
     /// <summary>规格根目录的绝对路径。</summary>
     public string SpecRoot { get; }
+
+    /// <summary>
+    /// 定位默认规格根。
+    /// 定位失败时回退到程序目录下的 spec，使随后的读取抛出规格类异常并给出可执行的修复指引，
+    /// 而不是让类型初始化失败把界面层带崩。
+    /// </summary>
+    /// <returns>默认规格根的绝对路径。</returns>
+    private static string ResolveDefaultSpecRoot()
+    {
+        string baseDirectory = AppContext.BaseDirectory;
+        string? customRoot = Environment.GetEnvironmentVariable(SpecRootEnvironmentVariable);
+        var overrides = string.IsNullOrWhiteSpace(customRoot)
+            ? null
+            : new[] { customRoot };
+
+        return SpecRootResolver.TryResolve(baseDirectory, overrides)
+               ?? Path.Combine(baseDirectory, SpecDirectoryName);
+    }
 
     /// <summary>
     /// 创建规格读取器。

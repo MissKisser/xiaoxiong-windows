@@ -47,10 +47,10 @@
          EndLineCap="Round"
          LineJoin="Round" />
 
-    <SolidColorBrush x:Key="Icon.Brush.Ink" Color="{DynamicResource Token.Color.Text.Primary}" />
-    <SolidColorBrush x:Key="Icon.Brush.Brand" Color="{DynamicResource Token.Color.Brand.Secondary}" />
-    <SolidColorBrush x:Key="Icon.Brush.Warning" Color="{DynamicResource Token.Color.State.Warning}" />
-    <SolidColorBrush x:Key="Icon.Brush.Danger" Color="{DynamicResource Token.Color.State.Danger}" />
+    <SolidColorBrush x:Key="Icon.Brush.Ink" Color="{DynamicResource Token.RawColor.Text.Primary}" />
+    <SolidColorBrush x:Key="Icon.Brush.Brand" Color="{DynamicResource Token.RawColor.Brand.Secondary}" />
+    <SolidColorBrush x:Key="Icon.Brush.Warning" Color="{DynamicResource Token.RawColor.State.Warning}" />
+    <SolidColorBrush x:Key="Icon.Brush.Danger" Color="{DynamicResource Token.RawColor.State.Danger}" />
 
     <!-- 实例与镜像生命周期 -->
     <DrawingImage x:Key="Icon.Instance">

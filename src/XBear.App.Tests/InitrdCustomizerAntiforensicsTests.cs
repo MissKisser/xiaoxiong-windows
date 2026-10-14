@@ -906,6 +906,202 @@ public sealed class InitrdCustomizerAntiforensicsTests : IDisposable
     }
 
     [Fact]
+    public async Task 根级属性改写_归档写入改写清单且init注入行级取值改写()
+    {
+        string workspace = _temp.New("root_rewrite");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile);
+
+        Assert.True(policy.RootPropertyRewriteEnabled);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        var result = await service.CustomizeAsync(initrdPath);
+
+        Assert.Contains(InitrdCustomizerService.RootPropertyRewriteEntryName, result.CustomizedEntries);
+
+        var rewriteEntry = CpioNewcArchive.Find(
+            ReadEntries(initrdPath),
+            InitrdCustomizerService.RootPropertyRewriteEntryName);
+        Assert.NotNull(rewriteEntry);
+
+        string rewriteText = Encoding.UTF8.GetString(rewriteEntry.Content);
+        Assert.StartsWith(
+            PropertyOverlayBuilder.RootPropertyRewriteMarkerHeader,
+            rewriteText,
+            StringComparison.Ordinal);
+        Assert.Contains("ro.build.type=userdebug", rewriteText);
+        Assert.Contains("ro.boot.flash.locked=0", rewriteText);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+
+        // 追加式覆写压不住镜像已有的根级键，必须逐键做行级取值改写。
+        Assert.Contains("if [ -f /etc/prop.rewrite ]; then", initText);
+        Assert.Contains("grep -q '^ro\\.build\\.type=' \"$target\" 2>/dev/null", initText);
+        Assert.Contains(
+            "sed -i 's|^ro\\.build\\.type=.*|ro.build.type=userdebug|' \"$target\" 2>/dev/null",
+            initText);
+        Assert.Contains(
+            "sed -i 's|^ro\\.build\\.tags=.*|ro.build.tags=release-keys|' \"$target\" 2>/dev/null",
+            initText);
+        Assert.Contains(
+            "sed -i 's|^ro\\.boot\\.flash\\.locked=.*|ro.boot.flash.locked=0|' \"$target\" 2>/dev/null",
+            initText);
+        Assert.Contains(
+            "sed -i 's|^ro\\.boot\\.vbmeta\\.device_state=.*|ro.boot.vbmeta.device_state=orange|' \"$target\" 2>/dev/null",
+            initText);
+        Assert.Contains(
+            "sed -i 's|^ro\\.boot\\.verifiedbootstate=.*|ro.boot.verifiedbootstate=orange|' \"$target\" 2>/dev/null",
+            initText);
+        Assert.Contains(
+            "sed -i 's|^ro\\.boot\\.veritymode=.*|ro.boot.veritymode=disabled|' \"$target\" 2>/dev/null",
+            initText);
+
+        // 沿用与追加覆写一致的 glob 扫描集，清单之外的后载入文件同样纳入。
+        Assert.Contains("for propfile in build.prop prop.default default.prop device.prop odm.prop; do", initText);
+        Assert.Contains("/android/$propfile /android/*/$propfile \\", initText);
+        Assert.Contains("/android/*/*/$propfile /android/*/*/*/$propfile \\", initText);
+        Assert.Contains("/android/*/*/*/*/$propfile; do", initText);
+
+        // 幂等与降级：改写目标值即写回自身，重复引导结果一致；只读目标留痕。
+        Assert.Contains("root property rewritten: ro.build.type=userdebug in $target", initText);
+        Assert.Contains("root property rewrite skipped (not writable): ro.build.type in $target", initText);
+    }
+
+    [Fact]
+    public async Task 根级属性改写_未配置清单时不注入任何改写语句()
+    {
+        string workspace = _temp.New("root_rewrite_off");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var policy = new InitrdCustomizationPolicy(
+            AdbGuestPort: 5555,
+            AdbPublicKey: HostPublicKey,
+            AdbApexMountPath: "/apex/com.android.adbd");
+
+        Assert.False(policy.RootPropertyRewriteEnabled);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        var result = await service.CustomizeAsync(initrdPath);
+
+        Assert.DoesNotContain(InitrdCustomizerService.RootPropertyRewriteEntryName, result.CustomizedEntries);
+
+        string initText = ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName);
+        Assert.DoesNotContain("root property rewritten", initText);
+        Assert.DoesNotContain("/etc/prop.rewrite", initText);
+    }
+
+    [Fact]
+    public async Task 根级属性改写_显式关闭清单时归档与脚本均不落地()
+    {
+        string workspace = _temp.New("root_rewrite_disabled");
+        string keyPath = WriteHostKey(workspace);
+        string initrdPath = WriteInitrd(workspace);
+
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+        var policy = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile,
+            enableRootPropertyRewrite: false);
+
+        Assert.Null(policy.RootPropertyRewriteContent);
+
+        var service = new InitrdCustomizerService(keyPath, policy);
+        var result = await service.CustomizeAsync(initrdPath);
+
+        Assert.DoesNotContain(InitrdCustomizerService.RootPropertyRewriteEntryName, result.CustomizedEntries);
+        Assert.Null(CpioNewcArchive.Find(
+            ReadEntries(initrdPath),
+            InitrdCustomizerService.RootPropertyRewriteEntryName));
+        Assert.DoesNotContain("root property rewritten", ReadEntryText(initrdPath, InitrdCustomizerService.InitEntryName));
+    }
+
+    [Theory]
+    [InlineData("ro.build.type")]
+    [InlineData("=userdebug")]
+    [InlineData("ro.build.type=")]
+    [InlineData("ro.build.type=user debug;rm -rf /")]
+    [InlineData("ro.build.type=user'debug")]
+    [InlineData("ro.build type=userdebug")]
+    [InlineData(".ro.build.type=userdebug")]
+    public void 可改变脚本语义或形态非法的改写清单行被拒绝(string line)
+    {
+        string content = PropertyOverlayBuilder.RootPropertyRewriteMarkerHeader + Environment.NewLine + line + Environment.NewLine;
+
+        Assert.Throws<XBearException>(() => InitrdCustomizerService.ParseRootPropertyRewrites(content));
+    }
+
+    [Fact]
+    public void 改写清单解析忽略空行注释并保持顺序()
+    {
+        string content = string.Join(
+            Environment.NewLine,
+            PropertyOverlayBuilder.RootPropertyRewriteMarkerHeader,
+            string.Empty,
+            "   ",
+            "ro.build.type=userdebug",
+            "# 注释行",
+            "ro.boot.veritymode=disabled");
+
+        var rules = InitrdCustomizerService.ParseRootPropertyRewrites(content);
+
+        Assert.Equal(2, rules.Count);
+        Assert.Equal("ro.build.type", rules[0].Key);
+        Assert.Equal("userdebug", rules[0].Value);
+        Assert.Equal("ro.boot.veritymode", rules[1].Key);
+        Assert.Equal("disabled", rules[1].Value);
+        Assert.Empty(InitrdCustomizerService.ParseRootPropertyRewrites("   "));
+    }
+
+    [Fact]
+    public void 改写清单参与指纹且变化触发重新定制()
+    {
+        var profile = DeviceProfileCatalog.Require(DeviceProfileCatalog.Vibe12ProfileId);
+
+        var withRewrite = InitrdCustomizationPolicy.CreateAntiforensicsPolicy(
+            adbGuestPort: 5555,
+            adbPublicKey: HostPublicKey,
+            adbApexMountPath: "/apex/com.android.adbd",
+            profile: profile);
+
+        var withoutRewrite = withRewrite with { RootPropertyRewriteContent = null };
+
+        Assert.NotEqual(
+            InitrdCustomizerService.ComputeFingerprint(withRewrite),
+            InitrdCustomizerService.ComputeFingerprint(withoutRewrite));
+
+        // 仅首尾空白差异不应改变指纹，改写清单本身才是指纹要素。
+        string spaced = PropertyOverlayBuilder.BuildRootPropertyRewriteContent(profile)
+            .Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace("\n", "  " + Environment.NewLine, StringComparison.Ordinal);
+
+        Assert.Equal(
+            InitrdCustomizerService.ComputeFingerprint(withRewrite),
+            InitrdCustomizerService.ComputeFingerprint(withRewrite with { RootPropertyRewriteContent = spaced }));
+
+        var changed = withRewrite with
+        {
+            RootPropertyRewriteContent = PropertyOverlayBuilder.RootPropertyRewriteMarkerHeader +
+                                         Environment.NewLine +
+                                         "ro.build.type=eng" +
+                                         Environment.NewLine,
+        };
+
+        Assert.NotEqual(
+            InitrdCustomizerService.ComputeFingerprint(withRewrite),
+            InitrdCustomizerService.ComputeFingerprint(changed));
+    }
+
+    [Fact]
     public async Task 硬件代号别名_HAL库目录按原生代号补建代号别名软链()
     {
         string workspace = _temp.New("hw_hal");
@@ -1192,6 +1388,10 @@ public sealed class InitrdCustomizerAntiforensicsTests : IDisposable
         Assert.True(policy.HardwareHalAliasEnabled);
         Assert.True(policy.StripPrivatePropertiesEnabled);
         Assert.True(policy.HostNameEnabled);
+        Assert.True(policy.RootPropertyRewriteEnabled);
+        Assert.Equal(
+            PropertyOverlayBuilder.BuildRootPropertyRewriteContent(profile),
+            policy.RootPropertyRewriteContent);
     }
 
     [Fact]
@@ -1219,6 +1419,7 @@ public sealed class InitrdCustomizerAntiforensicsTests : IDisposable
         Assert.NotEmpty(entries);
         Assert.NotNull(CpioNewcArchive.Find(entries, "init"));
         Assert.NotNull(CpioNewcArchive.Find(entries, InitrdCustomizerService.BuildPropOverrideEntryName));
+        Assert.NotNull(CpioNewcArchive.Find(entries, InitrdCustomizerService.RootPropertyRewriteEntryName));
     }
 
     private string WriteHostKey(string workspace)
