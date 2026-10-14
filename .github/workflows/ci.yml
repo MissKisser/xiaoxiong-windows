@@ -1,0 +1,51 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build-and-test:
+    name: Build, Test and Verify Package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore NuGet packages
+        run: dotnet restore XBear.sln
+
+      - name: Build solution (Release)
+        run: dotnet build XBear.sln -c Release --no-restore
+
+      - name: Run all unit tests (1500+ tests)
+        run: dotnet test XBear.sln -c Release --no-build --verbosity normal
+
+      - name: Verify packaging pipeline (Dry-run portable package)
+        shell: pwsh
+        run: |
+          ./packaging/build-package.ps1 -Configuration Release -SkipInstaller
+
+      - name: Verify package layout and spec integrity
+        shell: pwsh
+        run: |
+          $appExe = "packaging/staging/app/XBear.App.exe"
+          $specVersion = "packaging/staging/spec/version.json"
+          if (-not (Test-Path $appExe)) {
+            throw "打包校验失败：未生成 $appExe"
+          }
+          if (-not (Test-Path $specVersion)) {
+            throw "打包校验失败：契约目录缺少 $specVersion"
+          }
+          Write-Host "CI 打包流水线干跑验证通过！" -ForegroundColor Green

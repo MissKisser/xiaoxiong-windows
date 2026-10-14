@@ -1,0 +1,77 @@
+name: Release Pipeline
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: '发布版本标签 (例如 v0.1.0)'
+        required: false
+        default: 'v0.1.0'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, Package and Release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Setup .NET 8 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore NuGet packages
+        run: dotnet restore XBear.sln
+
+      - name: Build solution (Release)
+        run: dotnet build XBear.sln -c Release --no-restore
+
+      - name: Run all unit tests
+        run: dotnet test XBear.sln -c Release --no-build --verbosity normal
+
+      - name: Install Inno Setup 6 (via Chocolatey)
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Cache external runtime dependencies (QEMU & platform-tools)
+        id: cache-deps
+        uses: actions/cache@v4
+        with:
+          path: packaging/downloads
+          key: runtime-deps-qemu-11.1.0-adb-37.0.1
+
+      - name: Fetch QEMU and platform-tools
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          ./packaging/fetch-dependencies.ps1 -TargetDirectory packaging/downloads
+
+      - name: Build release packages (Installer and Portable Zip)
+        shell: pwsh
+        run: |
+          ./packaging/build-package.ps1 -Configuration Release -QemuPath packaging/downloads/qemu -AdbPath packaging/downloads/platform-tools
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: XBear-Windows-Packages
+          path: packaging/dist/*
+
+      - name: Create GitHub Draft Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: false
+          files: packaging/dist/*
+          generate_release_notes: true
