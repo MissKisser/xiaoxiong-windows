@@ -852,7 +852,7 @@ public sealed class SnapshotService
         {
             var paths = new QemuPaths();
             var result = await QemuCommandRunner.RunAsync(
-                paths.QemuImgPath,
+                paths.RequireImageExecutablePath(),
                 new[] { "snapshot", "-a", snapshotId, diskPath },
                 TimeSpan.FromSeconds(30),
                 cancellationToken).ConfigureAwait(false);
@@ -884,7 +884,7 @@ public sealed class SnapshotService
         {
             var paths = new QemuPaths();
             var result = await QemuCommandRunner.RunAsync(
-                paths.QemuImgPath,
+                paths.RequireImageExecutablePath(),
                 new[] { "snapshot", "-d", snapshotId, diskPath },
                 TimeSpan.FromSeconds(30),
                 cancellationToken).ConfigureAwait(false);

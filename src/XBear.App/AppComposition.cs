@@ -33,8 +33,16 @@ public static class AppComposition
     /// <param name="dataRoot">可写数据根目录，用于实例配置、overlay 与日志。</param>
     /// <param name="imagesRoot">只读 base 镜像根目录。</param>
     /// <param name="loader">规格读取器。</param>
+    /// <param name="qemuPaths">
+    /// QEMU 定位结果，为 null 时按宿主环境探测。
+    /// 注入未解析的定位结果用于验证组合根在 QEMU 缺席时仍能完成装配。
+    /// </param>
     /// <returns>装配结果。</returns>
-    public static AppServices Create(string dataRoot, string imagesRoot, SpecLoader loader)
+    public static AppServices Create(
+        string dataRoot,
+        string imagesRoot,
+        SpecLoader loader,
+        QemuPaths? qemuPaths = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(dataRoot);
         ArgumentException.ThrowIfNullOrWhiteSpace(imagesRoot);
@@ -61,7 +69,9 @@ public static class AppComposition
             Options = AcceleratorOptions.DefaultWhpxOptions,
         });
 
-        var paths = new QemuPaths();
+        // QEMU 定位结果不在此抛错：宿主未安装 QEMU 时应用仍要能起来，
+        // 由定位结果自身记录解析状态，实际启动实例或操作镜像时才给出带指引的异常。
+        var paths = qemuPaths ?? new QemuPaths();
         IQemuLauncher launcher = new QemuLauncher(paths, argBuilder, logRoot);
         IQcow2Manager qcow2 = new Qcow2Manager(paths);
 
@@ -139,7 +149,8 @@ public static class AppComposition
             moduleInstallerService,
             moduleWindows,
             snapshotService,
-            snapshotWindows);
+            snapshotWindows,
+            paths);
     }
 
     /// <summary>
@@ -252,6 +263,7 @@ public sealed record ManifestRejection(string ManifestName, string Reason);
 /// <param name="ModuleWindows">模块管理窗口宿主。</param>
 /// <param name="Snapshots">快照生命周期服务。</param>
 /// <param name="SnapshotWindows">快照管理窗口宿主。</param>
+/// <param name="QemuPaths">QEMU 安装定位结果；宿主未安装 QEMU 时解析状态可查询，启动期不因此抛错。</param>
 public sealed record AppServices(
     IInstanceRepository Repository,
     InstanceManager Manager,
@@ -275,4 +287,5 @@ public sealed record AppServices(
     Core.Modules.ModuleInstallerService Modules,
     Views.IModuleWindowHost ModuleWindows,
     Core.Snapshots.SnapshotService Snapshots,
-    Views.ISnapshotWindowHost SnapshotWindows);
+    Views.ISnapshotWindowHost SnapshotWindows,
+    QemuPaths QemuPaths);

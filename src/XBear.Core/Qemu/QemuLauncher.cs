@@ -218,12 +218,14 @@ public sealed class QemuLauncher : IQemuLauncher
         }
     }
 
-    /// <summary>定位 QEMU 系统模拟器可执行文件。</summary>
+    /// <summary>定位 QEMU 系统模拟器可执行文件。
+    /// 定位结果来自构造期探测，此处只校验文件仍在；宿主未安装 QEMU 时由定位结果自身给出处置建议。
+    /// </summary>
     /// <returns>可执行文件绝对路径。</returns>
-    /// <exception cref="XBearException">路径不存在时抛出 <see cref="ErrorCategory.Dependency"/>。</exception>
+    /// <exception cref="XBearException">未解析到安装位置或路径不存在时抛出 <see cref="ErrorCategory.Dependency"/>。</exception>
     private string ResolveExecutablePath()
     {
-        var executablePath = _paths.QemuSystemPath;
+        var executablePath = _paths.RequireSystemExecutablePath();
         if (File.Exists(executablePath))
         {
             return executablePath;

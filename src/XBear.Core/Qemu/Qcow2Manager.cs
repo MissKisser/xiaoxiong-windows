@@ -72,7 +72,7 @@ public sealed class Qcow2Manager : IQcow2Manager
         "vpc",
     };
 
-    private readonly string _qemuImgPath;
+    private readonly QemuPaths _paths;
     private readonly TimeSpan _commandTimeout;
     private readonly TimeSpan _importTimeout;
     private readonly IQemuImgCommandRunner _commandRunner;
@@ -82,28 +82,26 @@ public sealed class Qcow2Manager : IQcow2Manager
         new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>构造磁盘管理器。</summary>
-    /// <param name="paths">QEMU 可执行文件定位结果。</param>
+    /// <param name="paths">QEMU 可执行文件定位结果，qemu-img 路径在其实际执行时才解析。</param>
     public Qcow2Manager(QemuPaths paths)
         : this(paths, null)
     {
     }
 
     /// <summary>构造磁盘管理器并指定命令执行上限时长。</summary>
-    /// <param name="paths">QEMU 可执行文件定位结果。</param>
+    /// <param name="paths">QEMU 可执行文件定位结果，qemu-img 路径在其实际执行时才解析。</param>
     /// <param name="commandTimeout">单条命令的执行上限时长，为 null 时使用 <see cref="DefaultCommandTimeout"/>。</param>
-    /// <exception cref="XBearException">定位结果为空时抛出 <see cref="ErrorCategory.Dependency"/>。</exception>
     public Qcow2Manager(QemuPaths paths, TimeSpan? commandTimeout)
         : this(paths, commandTimeout, null)
     {
     }
 
     /// <summary>构造磁盘管理器并替换 qemu-img 执行边界与日志出口。</summary>
-    /// <param name="paths">QEMU 可执行文件定位结果。</param>
+    /// <param name="paths">QEMU 可执行文件定位结果，qemu-img 路径在其实际执行时才解析。</param>
     /// <param name="commandTimeout">单条命令的执行上限时长，为 null 时使用 <see cref="DefaultCommandTimeout"/>。</param>
     /// <param name="commandRunner">qemu-img 执行边界，为 null 时直接拉起 qemu-img 进程。</param>
     /// <param name="log">过程日志出口，为 null 时输出到 <see cref="Trace"/>。</param>
     /// <param name="importTimeout">镜像导入的执行上限时长，为 null 时使用 <see cref="DefaultImportTimeout"/>。</param>
-    /// <exception cref="XBearException">定位结果为空时抛出 <see cref="ErrorCategory.Dependency"/>。</exception>
     public Qcow2Manager(
         QemuPaths paths,
         TimeSpan? commandTimeout,
@@ -113,7 +111,7 @@ public sealed class Qcow2Manager : IQcow2Manager
     {
         ArgumentNullException.ThrowIfNull(paths);
 
-        _qemuImgPath = paths.QemuImgPath;
+        _paths = paths;
         _commandTimeout = commandTimeout ?? DefaultCommandTimeout;
         _importTimeout = importTimeout ?? DefaultImportTimeout;
         _commandRunner = commandRunner ?? new ProcessQemuImgCommandRunner();
@@ -425,7 +423,9 @@ public sealed class Qcow2Manager : IQcow2Manager
         }
     }
 
-    /// <summary>调用 qemu-img 执行边界，并把无法拉起进程的情况转成统一异常。</summary>
+    /// <summary>调用 qemu-img 执行边界，并把无法拉起进程的情况转成统一异常。
+    /// qemu-img 路径在此处才解析：宿主未安装 QEMU 时由定位结果给出处置建议，
+    /// 而不是让构造期就失败、连带阻断与 QEMU 无关的界面启动。</summary>
     private async Task<QemuImgCommandResult> ExecuteAsync(
         IReadOnlyList<string> arguments,
         TimeSpan timeout,
@@ -434,7 +434,7 @@ public sealed class Qcow2Manager : IQcow2Manager
         try
         {
             return await _commandRunner
-                .RunAsync(_qemuImgPath, arguments, timeout, cancellationToken)
+                .RunAsync(_paths.RequireImageExecutablePath(), arguments, timeout, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is System.ComponentModel.Win32Exception
